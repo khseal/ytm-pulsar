@@ -6,13 +6,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func buildSidx(timescale uint32, first uint32, refs [][2]uint32) []byte {
@@ -129,19 +127,28 @@ func TestSeekRelayRangesMatchRebasedVirtualFile(t *testing.T) {
 }
 
 func TestSeekPositionDoesNotJumpBackAfterPassingOffset(t *testing.T) {
-	cmd := exec.Command("true")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
+	p := &nativePlayer{window: &seekWindow{startMS: 60000}}
+	p.fetched.Store(true)
+	s := &Server{player: p, state: State{Status: "buffering", PositionMS: 60000}}
+	s.onPulsarState(mediaStatePlaying)
+	p.playingSince = p.playingSince.Add(-80 * time.Second)
+	if got := s.snapshot().PositionMS; got < 140000 || got > 141000 {
+		t.Fatal("seek offset lost after 80 seconds", got)
 	}
-	in, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
+	s.onPulsarState(mediaStatePaused)
+	if got := s.snapshot().PositionMS; got < 140000 || got > 141000 || s.snapshot().Status != "paused" {
+		t.Fatal("pause lost the position", got)
 	}
-	p := &nativePlayer{cmd: cmd, in: in, window: &seekWindow{startMS: 60000}}
-	s := &Server{player: p, closing: true}
-	s.monitor(p, 0, io.NopCloser(strings.NewReader("{\"event\":\"position\",\"position_ms\":80000}\n")))
-	if s.snapshot().PositionMS != 140000 {
-		t.Fatal("seek offset lost after 80 seconds", s.snapshot().PositionMS)
+}
+
+func TestPulsarIgnoresPreviousTrackStates(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	p := &nativePlayer{}
+	s := &Server{player: p, state: State{Status: "buffering", Queue: []Track{{ID: "abcdefghijk"}}}}
+	s.onPulsarState(mediaStatePlaying)
+	s.onPulsarState(mediaStateIdle)
+	if s.player != p || s.snapshot().Status != "buffering" {
+		t.Fatal("state of the previous track ended the new one", s.snapshot())
 	}
 }
 

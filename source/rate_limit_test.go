@@ -20,15 +20,15 @@ func requireRateLimit(t *testing.T, err error) {
 	}
 }
 
-func TestMusic429StopsFallbackAndAllUncachedPlaybackRequests(t *testing.T) {
+func Test429StopsFallbackAndAllUncachedPlaybackRequests(t *testing.T) {
 	c := newCatalog()
 	c.auth = &Credentials{Cookie: "SAPISID=fixture-only", AuthUser: "0"}
 	c.playerSTS = 20761
 	calls := 0
 	c.http.Transport = transportFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.URL.Host != "music.youtube.com" {
-			t.Fatal("429 triggered a public fallback request")
+		if r.URL.Host == "music.youtube.com" {
+			t.Fatal("429 of the public player triggered a Music fallback request")
 		}
 		return &http.Response{StatusCode: 429, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
 	})

@@ -3,7 +3,7 @@ module local/ytm-alice
 go 1.27.3
 
 require (
-	github.com/godbus/dbus/v5 v5.2.4
+	github.com/flynn/noise v1.1.0
 	github.com/kkdai/youtube/v2 v2.10.7-0.20260829130232-3876742b95fd
 	github.com/tdewolff/parse/v2 v2.8.11
 )
@@ -14,6 +14,7 @@ require (
 	github.com/dop251/goja v0.0.0-20260311135729-065cd970411c // indirect
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/google/pprof v0.0.0-20260302011040-a15ffb7f9dcc // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )

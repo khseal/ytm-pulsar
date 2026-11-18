@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 	"time"
@@ -37,6 +38,7 @@ func (c *Catalog) musicVideo(ctx context.Context, id string) (*yt.Video, error) 
 	switch status {
 	case "OK":
 	case "LOGIN_REQUIRED":
+		log.Printf("YouTube LOGIN_REQUIRED track=%s reason=%q", id, str(get(data, "playabilityStatus", "reason")))
 		return nil, unavailableTrack{"YouTube: для этого трека нужен вход и подтверждённый возраст аккаунта; подключите или обновите cookies в настройках"}
 	case "CONTENT_CHECK_REQUIRED", "AGE_CHECK_REQUIRED":
 		return nil, unavailableTrack{"YouTube: подтвердите доступ к этому треку в YouTube Music и обновите cookies"}
@@ -54,7 +56,7 @@ func (c *Catalog) musicVideo(ctx context.Context, id string) (*yt.Video, error) 
 		return nil, errors.New("YouTube: некорректное описание аудиопотока")
 	}
 	seconds, _ := strconv.ParseInt(str(get(data, "videoDetails", "lengthSeconds")), 10, 64)
-	return &yt.Video{ID: id, Title: str(get(data, "videoDetails", "title")), Author: str(get(data, "videoDetails", "author")), Duration: time.Duration(seconds) * time.Second, Formats: append(formats.Adaptive, formats.Formats...)}, nil
+	return &yt.Video{ID: id, Title: str(get(data, "videoDetails", "title")), Author: str(get(data, "videoDetails", "author")), Duration: time.Duration(seconds) * time.Second, Formats: append(formats.Adaptive, formats.Formats...), HLSManifestURL: str(get(data, "streamingData", "hlsManifestUrl"))}, nil
 }
 
 func resolverError(err error) error {

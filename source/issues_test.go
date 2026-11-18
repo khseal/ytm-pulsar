@@ -70,27 +70,6 @@ func TestSettingsPersistAndLegacyPortMigration(t *testing.T) {
 	}
 }
 
-func TestVoiceRecommendationsAndCustomAliases(t *testing.T) {
-	for _, phrase := range []string{"Алиса, включи музыку на ютубе!", "поставь музыку на ютубе", "включи рекомендации"} {
-		a, q, ok := voiceAction(phrase)
-		if !ok || a != "recommendations" || q != "" {
-			t.Fatalf("%s => %s %s %v", phrase, a, q, ok)
-		}
-	}
-	settings := defaultSettings()
-	settings.VoiceCommands = map[string]string{"сыграй {query}": "play", "включи подборку": "recommendations", "замри": "pause"}
-	s := &Server{settings: &settings}
-	for _, tc := range []struct{ phrase, action, query string }{{"Алиса, сыграй Daft Punk", "play", "daft punk"}, {"замри", "pause", ""}, {"включи подборку", "recommendations", ""}} {
-		a, q, ok := s.voiceAction(tc.phrase)
-		if !ok || a != tc.action || q != tc.query {
-			t.Fatalf("%+v: %s %s", tc, a, q)
-		}
-	}
-	if _, _, ok := s.voiceAction("включи свет"); ok {
-		t.Fatal("custom aliases intercepted smart home")
-	}
-}
-
 func TestPlaylistLoadsAllPagesWithoutDuplicates(t *testing.T) {
 	c := newCatalog()
 	calls := 0
@@ -163,7 +142,7 @@ func TestPlaylistDoesNotFollowEndlessSuggestions(t *testing.T) {
 	}
 }
 
-func TestExplicitTrackUsesMusicSessionOnly(t *testing.T) {
+func TestRefusedPublicTrackFallsBackToMusicSession(t *testing.T) {
 	c := newCatalog()
 	c.auth = &Credentials{Cookie: "SAPISID=fixture-only", AuthUser: "0"}
 	c.playerSTS = 20761
@@ -191,8 +170,8 @@ func TestExplicitTrackUsesMusicSessionOnly(t *testing.T) {
 		return jsonReply(map[string]any{"playabilityStatus": map[string]any{"status": "OK"}, "streamingData": map[string]any{"adaptiveFormats": []any{map[string]any{"itag": 140, "url": "https://test.googlevideo.com/audio", "mimeType": "audio/mp4", "audioChannels": 2, "contentLength": "1024"}}}}), nil
 	})}
 	stream, err := c.resolve(context.Background(), "abcdefghijk")
-	if err != nil || stream.length != 1024 || musicCalls != 1 || publicCalls != 0 {
-		t.Fatalf("fallback failed: %v, %+v, calls=%d", err, stream, musicCalls)
+	if err != nil || stream.length != 1024 || musicCalls != 1 || publicCalls == 0 {
+		t.Fatalf("fallback failed: %v, %+v, music=%d public=%d", err, stream, musicCalls, publicCalls)
 	}
 }
 
@@ -271,31 +250,6 @@ func TestShuffleKeepsCurrentTrackAndRestoresOrder(t *testing.T) {
 	}
 }
 
-func TestLEDRingDiscoveryNeverIncludesClockOrMicrophone(t *testing.T) {
-	root := t.TempDir()
-	for i := 1; i <= 3; i++ {
-		for _, color := range []string{"red", "green", "blue"} {
-			path := filepath.Join(root, fmt.Sprintf("micro:%s:ring%d", color, i))
-			os.MkdirAll(path, 0700)
-			os.WriteFile(filepath.Join(path, "brightness"), []byte("255"), 0600)
-		}
-	}
-	for _, name := range []string{"micro:red:microphone", "mini2:white:clock"} {
-		path := filepath.Join(root, name)
-		os.MkdirAll(path, 0700)
-		os.WriteFile(filepath.Join(path, "brightness"), []byte("255"), 0600)
-	}
-	paths := playbackLEDPaths(root)
-	if len(paths) != 9 {
-		t.Fatal(paths)
-	}
-	for _, path := range paths {
-		if !strings.Contains(path, "ring") {
-			t.Fatal("non-ring LED included", path)
-		}
-	}
-}
-
 func TestConfiguredWebPortOverridesDefaultAndEnvTakesPrecedence(t *testing.T) {
 	settings := defaultSettings()
 	settings.WebAddr = ":34567"
@@ -306,24 +260,6 @@ func TestConfiguredWebPortOverridesDefaultAndEnvTakesPrecedence(t *testing.T) {
 	t.Setenv("YTM_ALICE_WEB_ADDR", "127.0.0.1:18081")
 	if effectiveWebAddr(settings) != "127.0.0.1:18081" {
 		t.Fatal("environment override ignored")
-	}
-}
-
-func TestNativeCLIEmptyAliasesSurviveRPCSerialization(t *testing.T) {
-	t.Setenv("YTM_ALICE_DATA", t.TempDir())
-	settings := defaultSettings()
-	settings.VoiceCommands = map[string]string{"замри": "pause"}
-	s := &Server{settings: &settings}
-	r, err := configRequest([]string{"set", "voice_commands", "{}"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := json.Marshal(r)
-	var decoded request
-	json.Unmarshal(raw, &decoded)
-	result := s.command(context.Background(), decoded)
-	if result.Error != "" || len(s.getSettings().VoiceCommands) != 0 {
-		t.Fatal("CLI could not remove voice aliases", result.Error)
 	}
 }
 

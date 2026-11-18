@@ -30,6 +30,9 @@ func fixturePlayerVariants() []string {
 		strings.Replace(fixtureURLPlayer, "function decipher(base,key,s)", "decipher=function(base,key,s)", 1),
 		"var ignored={};" + strings.Replace(fixtureURLPlayer, "}).call(this);", "})();", 1),
 		strings.Replace(fixtureURLPlayer, "throwIfNativeStartupRuns();", "if(false){missing();}else if(false){missing();}(throwIfNativeStartupRuns());", 1),
+		// String-table players hide the 'alr' literal behind computed lookups.
+		strings.Replace(fixtureURLPlayer, "function decipher(base,key,s){var u=new URLObject();u.set('alr','yes');u.set(key,s);return u;}",
+			"var T=['set','alr','yes'];decipher=function(a,b,c){var e=0;a=new URLObject(a,!0);a[T[e]](T[e+1],T[e+2]);a.set(b,c);return a};", 1),
 	}
 }
 

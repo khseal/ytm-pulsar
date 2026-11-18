@@ -14,56 +14,6 @@ import (
 	"testing"
 )
 
-func TestVoiceRouting(t *testing.T) {
-	for _, q := range []string{"Алиса, включи на ютубе Daft Punk!", "включи в ютубе jazz", "Включи YouTube Music ambient"} {
-		a, s, ok := voiceAction(q)
-		if !ok || a != "play" || s == "" {
-			t.Fatalf("not routed: %q", q)
-		}
-	}
-	for _, q := range []string{"Алиса, какая погода?", "включи музыку", "включи мою волну"} {
-		if _, _, ok := voiceAction(q); ok {
-			t.Fatalf("native request intercepted: %q", q)
-		}
-	}
-	a, _, ok := voiceAction("Алиса, следующий трек")
-	if !ok || a != "next" {
-		t.Fatal("next command missing")
-	}
-}
-
-func TestVoiceMusicShorthandAndNativeBoundaries(t *testing.T) {
-	for _, tc := range []struct{ phrase, query string }{
-		{"Алиса поставь sewerslvt newlove", "sewerslvt newlove"},
-		{"Алиса, поставь Sewerslvt Newlove, пожалуйста!", "sewerslvt newlove"},
-		{"поставь песню Sewerslvt Newlove", "sewerslvt newlove"},
-		{"включи трек Sewerslvt Newlove", "sewerslvt newlove"},
-		{"поставь на ютубе Sewerslvt Newlove", "sewerslvt newlove"},
-		{"поставь альбом Random Access Memories", "альбом random access memories"},
-		{"включи плейлист jazz", "плейлист jazz"},
-		{"поставь песню таймер", "таймер"},
-	} {
-		a, query, ok := voiceAction(tc.phrase)
-		if !ok || a != "play" || query != tc.query {
-			t.Fatalf("%q => %q %q %v", tc.phrase, a, query, ok)
-		}
-	}
-	for _, phrase := range []string{
-		"поставь таймер на пять минут", "поставь пять минут", "поставь на завтра будильник",
-		"поставь будильник на семь", "поставь напоминание", "поставь громкость на двадцать",
-		"поставь двадцать градусов", "включи свет", "включи кухню", "включи радио",
-		"поставь радио", "поставь сказку", "поставь музыку", "включи музыку", "включи мою волну",
-		"поставь", "Алиса, какая погода?",
-	} {
-		if a, query, ok := voiceAction(phrase); ok {
-			t.Fatalf("native request %q intercepted as %s %q", phrase, a, query)
-		}
-	}
-	if a, _, ok := voiceAction("поставь на паузу"); !ok || a != "pause" {
-		t.Fatal("shorthand shadowed pause control")
-	}
-}
-
 func TestRelayBoundsChunksAndPreservesRanges(t *testing.T) {
 	data := bytes.Repeat([]byte("abcdefg"), 400000)
 	c := newCatalog()
@@ -118,25 +68,6 @@ func TestRelayBoundsChunksAndPreservesRanges(t *testing.T) {
 		t.Fatal("HEAD must use metadata without a CDN HEAD request")
 	}
 }
-func TestIPCEnvelopeAndIdle(t *testing.T) {
-	d := proto(rpc(8, pi(1, 3)))
-	if d[253].n != 210 || string(proto(d[252].b)[7].b) != "AliceCapability" {
-		t.Fatal("bad remoting envelope")
-	}
-	e := decodeAlice(cat(pb(252, cat(pi(1, 3), pb(2, []byte("включи на ютубе jazz")))), pi(253, 3)))
-	if !e.HasState || e.State != 3 || e.Text != "включи на ютубе jazz" {
-		t.Fatal("speech decode failed")
-	}
-	idle := decodeAlice(cat(pb(252, pi(5, 1)), pi(253, 3)))
-	if !idle.HasState || idle.State != 0 {
-		t.Fatal("omitted proto2 idle must decode as idle")
-	}
-	for _, b := range [][]byte{{0}, {8, 128}, {18, 200}, {15}} {
-		if _, e := parseProto(b); e == nil {
-			t.Fatalf("malformed protobuf accepted: %v", b)
-		}
-	}
-}
 func TestCatalogActualSearch(t *testing.T) {
 	raw, e := os.ReadFile("testdata/search.json")
 	if e != nil {
@@ -176,7 +107,7 @@ func TestStopCancelsPendingSearch(t *testing.T) {
 		body := `{"contents":[{"playlistPanelVideoRenderer":{"videoId":"abcdefghijk","title":{"simpleText":"Track"}}}]}`
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
-	s := &Server{catalog: c, state: State{Status: "stopped", Announce: false}}
+	s := &Server{catalog: c, state: State{Status: "stopped"}}
 	done := make(chan response, 1)
 	go func() { done <- s.command(context.Background(), request{Action: "play", Query: "jazz"}) }()
 	<-entered
@@ -199,7 +130,7 @@ func TestExternalLinksRejected(t *testing.T) {
 func TestStaleRetryDoesNotRestartStoppedPlayer(t *testing.T) {
 	s := &Server{generation: 3, state: State{Status: "stopped", Queue: []Track{{ID: "abcdefghijk"}}}}
 	old := uint64(2)
-	s.startGuarded(0, false, 1, &old)
+	s.startGuarded(0, 1, &old)
 	if s.snapshot().Status != "stopped" || s.generation != 3 || s.player != nil {
 		t.Fatal("stale retry restarted playback")
 	}

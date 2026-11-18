@@ -15,31 +15,32 @@ import (
 const defaultWebAddr = ":24721"
 
 type Settings struct {
-	WebHosts       []string          `json:"web_hosts"`
-	WebAddr        string            `json:"web_addr"`
-	Radio          bool              `json:"radio"`
-	Shuffle        bool              `json:"shuffle"`
-	AnnounceText   string            `json:"announce_text"`
-	AnnounceErrors bool              `json:"announce_errors"`
-	PlaybackLED    bool              `json:"playback_led"`
-	YouTubeOnly    bool              `json:"youtube_only"`
-	VoiceCommands  map[string]string `json:"voice_commands"`
+	WebHosts []string `json:"web_hosts"`
+	WebAddr  string   `json:"web_addr"`
+	Radio    bool     `json:"radio"`
+	Shuffle  bool     `json:"shuffle"`
+}
+
+// storedSettings also accepts the Alice-only keys an ytm-alice settings.json
+// still carries; they are dropped on the next save.
+type storedSettings struct {
+	Settings
+	AnnounceText   json.RawMessage `json:"announce_text"`
+	AnnounceErrors json.RawMessage `json:"announce_errors"`
+	PlaybackLED    json.RawMessage `json:"playback_led"`
+	YouTubeOnly    json.RawMessage `json:"youtube_only"`
+	VoiceCommands  json.RawMessage `json:"voice_commands"`
 }
 
 type SettingsPatch struct {
-	WebHosts       []string          `json:"web_hosts,omitempty"`
-	WebAddr        *string           `json:"web_addr,omitempty"`
-	Radio          *bool             `json:"radio,omitempty"`
-	Shuffle        *bool             `json:"shuffle,omitempty"`
-	AnnounceText   *string           `json:"announce_text,omitempty"`
-	AnnounceErrors *bool             `json:"announce_errors,omitempty"`
-	PlaybackLED    *bool             `json:"playback_led,omitempty"`
-	YouTubeOnly    *bool             `json:"youtube_only,omitempty"`
-	VoiceCommands  map[string]string `json:"voice_commands"`
+	WebHosts []string `json:"web_hosts,omitempty"`
+	WebAddr  *string  `json:"web_addr,omitempty"`
+	Radio    *bool    `json:"radio,omitempty"`
+	Shuffle  *bool    `json:"shuffle,omitempty"`
 }
 
 func defaultSettings() Settings {
-	return Settings{WebAddr: defaultWebAddr, Radio: true, AnnounceText: "Включаю", AnnounceErrors: true, PlaybackLED: true, VoiceCommands: map[string]string{}}
+	return Settings{WebAddr: defaultWebAddr, Radio: true}
 }
 
 func settingsPath() string { return filepath.Join(dataDir(), "settings.json") }
@@ -49,17 +50,8 @@ func (s *Server) settingsLocked() Settings {
 	if s.settings != nil {
 		value = *s.settings
 	}
-	value.VoiceCommands = cloneCommands(value.VoiceCommands)
 	value.WebHosts = append([]string(nil), value.WebHosts...)
 	return value
-}
-
-func cloneCommands(commands map[string]string) map[string]string {
-	copy := map[string]string{}
-	for phrase, action := range commands {
-		copy[phrase] = action
-	}
-	return copy
 }
 
 func (s *Server) getSettings() Settings {
@@ -86,29 +78,6 @@ func validateSettings(value Settings) error {
 		}
 		if n == 8008 || n == 18883 {
 			return errors.New("порт занят службой трансляции или аудиоплеером")
-		}
-	}
-	if len([]rune(value.AnnounceText)) > 200 || strings.ContainsAny(value.AnnounceText, "\r\n\x00") {
-		return errors.New("фраза перед музыкой: до 200 символов, одна строка")
-	}
-	if len(value.VoiceCommands) > 40 {
-		return errors.New("можно добавить до 40 голосовых команд")
-	}
-	for phrase, action := range value.VoiceCommands {
-		if len([]rune(phrase)) > 120 || normalize(phrase) != phrase || phrase == "" {
-			return errors.New("голосовая команда: до 120 символов, строчными буквами")
-		}
-		switch action {
-		case "play":
-			if !strings.HasSuffix(phrase, " {query}") || strings.Count(phrase, "{query}") != 1 {
-				return errors.New("команда поиска должна заканчиваться на {query}")
-			}
-		case "pause", "resume", "stop", "next", "previous", "what", "recommendations", "shuffle-on", "shuffle-off":
-			if strings.ContainsAny(phrase, "{}") {
-				return errors.New("{query} используется только для поиска")
-			}
-		default:
-			return errors.New("неизвестное действие голосовой команды")
 		}
 	}
 	return nil
@@ -154,9 +123,11 @@ func (s *Server) loadSettings() error {
 		defer f.Close()
 		decoder := json.NewDecoder(io.LimitReader(f, 32<<10))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF {
+		stored := storedSettings{Settings: value}
+		if decoder.Decode(&stored) != nil || decoder.Decode(new(any)) != io.EOF {
 			return errors.New("повреждён settings.json")
 		}
+		value = stored.Settings
 	}
 	if err := validateSettings(value); err != nil {
 		return err
@@ -186,26 +157,8 @@ func (s *Server) settingsCommand(r request) response {
 		if p.Shuffle != nil {
 			value.Shuffle = *p.Shuffle
 		}
-		if p.AnnounceText != nil {
-			value.AnnounceText = *p.AnnounceText
-		}
-		if p.AnnounceErrors != nil {
-			value.AnnounceErrors = *p.AnnounceErrors
-		}
-		if p.PlaybackLED != nil {
-			value.PlaybackLED = *p.PlaybackLED
-		}
-		if p.YouTubeOnly != nil {
-			value.YouTubeOnly = *p.YouTubeOnly
-		}
-		if p.VoiceCommands != nil {
-			value.VoiceCommands = cloneCommands(p.VoiceCommands)
-		}
 		if err := validateSettings(value); err != nil {
 			return response{Error: err.Error()}
-		}
-		if p.PlaybackLED != nil && !*p.PlaybackLED && len(playbackLEDPaths("/sys/class/leds")) == 0 {
-			return response{Error: "управление подсветкой этой модели пока не поддерживается"}
 		}
 		if err := writeSettings(value); err != nil {
 			return response{Error: "не удалось сохранить настройки"}
@@ -216,7 +169,7 @@ func (s *Server) settingsCommand(r request) response {
 	if address == "" {
 		address = effectiveWebAddr(value)
 	}
-	return response{Settings: &value, WebAddr: address, LEDControl: len(playbackLEDPaths("/sys/class/leds")) > 0}
+	return response{Settings: &value, WebAddr: address}
 }
 
 func effectiveWebAddr(settings Settings) string {
@@ -236,7 +189,7 @@ func configRequest(args []string) (request, error) {
 	key, value := args[1], strings.Join(args[2:], " ")
 	var raw any = value
 	switch key {
-	case "radio", "shuffle", "playback_led", "announce_errors", "youtube_only":
+	case "radio", "shuffle":
 		v, err := strconv.ParseBool(value)
 		if err != nil {
 			return request{}, errors.New("нужно true или false")
@@ -248,13 +201,7 @@ func configRequest(args []string) (request, error) {
 			return request{}, errors.New("нужен JSON-массив доменов")
 		}
 		raw = hosts
-	case "voice_commands":
-		var commands map[string]string
-		if json.Unmarshal([]byte(value), &commands) != nil || commands == nil {
-			return request{}, errors.New("нужен JSON-объект голосовых команд")
-		}
-		raw = commands
-	case "web_addr", "announce_text":
+	case "web_addr":
 	default:
 		return request{}, fmt.Errorf("неизвестная настройка %s", key)
 	}

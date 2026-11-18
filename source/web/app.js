@@ -15,7 +15,7 @@ let discoveredAccounts=[];
 let accountKey="";
 let previousAuth=null;
 let settings=null;
-const titles = {queue:'Очередь',search:'Поиск',liked:'Мои лайки',playlists:'Плейлисты',commands:'Голосовые команды',settings:'Настройки'};
+const titles = {queue:'Очередь',search:'Поиск',liked:'Мои лайки',playlists:'Плейлисты',settings:'Настройки'};
 const statusText = {playing:'Сейчас играет',paused:'На паузе',stopped:'Готова слушать',searching:'Ищем музыку…',buffering:'Подготовка трека…',error:'Не удалось включить трек'};
 const formatTime = (ms) => { const s=Math.max(0,Math.floor((ms||0)/1000)); return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; };
 
@@ -115,19 +115,19 @@ function renderState(next) {
   state=next;
   const track=state.queue?.[state.index];
   $('current-title').textContent=track?.title||'Что включим?';
-  $('current-artist').textContent=track?.artists||'Найди трек или попроси Алису';
+  $('current-artist').textContent=track?.artists||'Найди трек или включи через Cast';
   $('player-status').textContent=statusText[state.status]||state.status;
   setArtwork($('current-cover'),track?.thumbnail_url);
   const playing=['playing','buffering','searching'].includes(state.status);
   $('toggle').replaceChildren(icon(playing?'pause':'play'));$('toggle').setAttribute('aria-label',playing?'Пауза':'Продолжить');
   $('toggle').disabled=!track;$('stop').disabled=!track;$('previous').disabled=!track||state.index===0;$('next').disabled=!track||state.index>=state.queue.length-1;
   $('progress').max=Math.max(1,track?.duration_ms||1);$('progress').value=state.position_ms||0;
+  $('seekbar').classList.toggle('disabled',!(track?.duration_ms>0));
   $('elapsed').textContent=formatTime(state.position_ms);$('duration').textContent=formatTime(track?.duration_ms);
   $('queue-caption').textContent=track?`${state.queue.length} треков · выбран ${state.index+1}`:'Выбери музыку для начала';
-  $('announce').checked=state.announce;
   $('shuffle-queue').setAttribute('aria-pressed',String(!!state.shuffle));
   $('shuffle-queue').textContent=state.shuffle?'По порядку':'Перемешать';
-  $('sidebar-version').textContent=`ytm-alice ${state.version}`;
+  $('sidebar-version').textContent=`ytm-pulsar ${state.version}`;
   if(state.auth)renderAuth(state.auth);
   $('logout-auth').disabled=!state.logged_in;
   const signature=JSON.stringify(state.queue);
@@ -183,7 +183,7 @@ function showView(view) {
   if(view==='search') $('search-input').focus();
   if(view==='liked'&&!loadedLiked) perform(null,loadLiked);
   if(view==='playlists'&&!loadedPlaylists) perform(null,loadPlaylists);
-  if(view==='settings'||view==='commands')perform(null,loadSettings);
+  if(view==='settings')perform(null,loadSettings);
   if(view==='settings'&&state?.logged_in)perform(null,()=>command('auth-check'));
 }
 async function poll() {
@@ -198,12 +198,17 @@ $('search-form').addEventListener('submit',event=>{
   event.preventDefault();const query=$('search-input').value.trim();if(!query)return;
   perform($('search-submit'),async()=>{empty($('search-results'),'Ищем в YouTube Music…');try{const data=await command('search',{query});renderTracks($('search-results'),data.tracks||[],'search');}catch(error){empty($('search-results'),error.message);throw error;}});
 });
+$('seekbar').onclick=event=>{
+  const track=state?.queue?.[state.index];if(!(track?.duration_ms>0))return;
+  const box=$('seekbar').getBoundingClientRect();
+  const position_ms=Math.round(Math.min(1,Math.max(0,(event.clientX-box.left)/box.width))*track.duration_ms);
+  perform(null,()=>command('seek',{position_ms}));
+};
 for(const action of ['previous','next','stop','toggle']) $(action).onclick=()=>perform($(action),()=>command(action));
 $('account-shortcut').onclick=()=>showView('settings');
 document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>showView(button.dataset.view));
 $('refresh-liked').onclick=()=>perform($('refresh-liked'),loadLiked);
 $('refresh-playlists').onclick=()=>perform($('refresh-playlists'),loadPlaylists);
-$('announce').onchange=()=>perform(null,async()=>{try{await command($('announce').checked?'announce-on':'announce-off');}catch(error){$('announce').checked=!!state?.announce;throw error;}});
 $('check-auth').onclick=()=>perform($('check-auth'),async()=>{await command('auth-check');notice('Вход в YouTube Music подтверждён.',true);});
 $('logout-auth').onclick=()=>perform($('logout-auth'),async()=>{await command('auth-logout');if(importCredentials)importCredentials.cookie='';importCredentials=null;discoveredAccounts=[];$('cookie-file').value='';$('account-choice').hidden=true;loadedLiked=false;loadedPlaylists=false;notice('Аккаунт отключён от колонки.',true);await request('/api/state');});
 let tvTimer=null;
@@ -262,41 +267,18 @@ $('connect-account').onclick=()=>perform($('connect-account'),async()=>{
  $('cookie-file').value='';$('account-choice').hidden=true;loadedLiked=false;loadedPlaylists=false;
  notice('Подключён профиль '+selected.name+'.',true);await request('/api/state');
 });
-const voiceActions={play:'Найти и включить',recommendations:'Рекомендации',pause:'Пауза',resume:'Продолжить',stop:'Стоп',next:'Следующий трек',previous:'Предыдущий трек',what:'Название трека','shuffle-on':'Перемешать','shuffle-off':'По порядку'};
-function addVoiceAlias(phrase='',action='play') {
- const row=document.createElement('div');row.className='voice-alias';
- const input=document.createElement('input');input.type='text';input.maxLength=120;input.placeholder='сыграй {query}';input.value=phrase;input.setAttribute('aria-label','Фраза голосовой команды');
- const select=document.createElement('select');select.setAttribute('aria-label','Действие голосовой команды');
- for(const [value,label] of Object.entries(voiceActions)){const option=document.createElement('option');option.value=value;option.textContent=label;select.append(option);}select.value=action;
- const remove=document.createElement('button');remove.type='button';remove.className='text-button';remove.textContent='Удалить';remove.onclick=()=>row.remove();
- row.append(input,select,remove);$('voice-aliases').append(row);
-}
 async function loadSettings(){
  const data=await command('config-get');settings=data.settings;
- $('radio').checked=settings.radio;$('shuffle').checked=settings.shuffle;$('announce-errors').checked=settings.announce_errors;$('youtube-only').checked=settings.youtube_only;
- $('playback-led').checked=settings.playback_led;$('playback-led').disabled=!data.led_control;
- $('led-help').textContent=data.led_control?'Индикация диалога Алисы сохраняется':'Управление подсветкой этой модели пока недоступно';
- $('announce-text').value=settings.announce_text;
+ $('radio').checked=settings.radio;$('shuffle').checked=settings.shuffle;
  $('web-hosts').value=(settings.web_hosts||[]).join(', ');
  $('web-port').value=settings.web_addr==='off'?'24721':settings.web_addr.split(':').at(-1);
- $('voice-aliases').replaceChildren();for(const [phrase,action] of Object.entries(settings.voice_commands||{}))addVoiceAlias(phrase,action);
 }
-$('add-voice-alias').onclick=()=>{if($('voice-aliases').children.length<40)addVoiceAlias();};
-$('voice-commands-form').addEventListener('submit',event=>{
- event.preventDefault();perform($('save-voice-commands'),async()=>{
-  if(!settings)throw new Error('Команды ещё загружаются.');
-  const aliases={};for(const row of $('voice-aliases').children){const phrase=row.querySelector('input').value.trim().toLowerCase();if(!phrase)continue;if(Object.hasOwn(aliases,phrase))throw new Error('Команды не должны повторяться.');aliases[phrase]=row.querySelector('select').value;}
-  const result=await command('config-set',{settings:{voice_commands:aliases}});settings=result.settings;
-  notice('Голосовые команды сохранены.',true);
- });
-});
 $('settings-form').addEventListener('submit',event=>{
  event.preventDefault();perform($('save-settings'),async()=>{
   if(!settings)throw new Error('Настройки ещё загружаются.');
   const port=Number($('web-port').value);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Укажи порт от 1 до 65535.');
   const host=settings.web_addr==='off'?'':settings.web_addr.slice(0,settings.web_addr.lastIndexOf(':'));
-  const next={web_hosts:$('web-hosts').value.split(',').map(value=>value.trim().toLowerCase()).filter(Boolean),web_addr:host+':'+port,radio:$('radio').checked,shuffle:$('shuffle').checked,announce_text:$('announce-text').value,announce_errors:$('announce-errors').checked,youtube_only:$('youtube-only').checked,playback_led:$('playback-led').checked};
-  if($('playback-led').disabled)delete next.playback_led;
+  const next={web_hosts:$('web-hosts').value.split(',').map(value=>value.trim().toLowerCase()).filter(Boolean),web_addr:host+':'+port,radio:$('radio').checked,shuffle:$('shuffle').checked};
   const oldPort=settings.web_addr;const oldShuffle=state?.shuffle;
   const result=await command('config-set',{settings:next});settings=result.settings;
   if(oldShuffle!==next.shuffle)await command(next.shuffle?'shuffle-on':'shuffle-off');

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -73,6 +74,7 @@ func readPlayerProgram(ctx context.Context, id string, h *http.Client) (string, 
 	if path == "" {
 		return "", errors.New("player script missing")
 	}
+	log.Print("player program ", path)
 	data, err := read("https://www.youtube.com"+path, 8<<20)
 	return string(data), err
 }
@@ -141,6 +143,7 @@ func (c *Catalog) decipherURL(ctx context.Context, id string, format yt.Format) 
 		return "", errors.New("некорректный адрес аудиопотока")
 	}
 	query := u.Query()
+	log.Printf("stream track=%s client=%s pot=%t", id, query.Get("c"), query.Get("pot") != "")
 	n := query.Get("n")
 	requests := []any{}
 	if sig != "" {
@@ -163,6 +166,8 @@ func (c *Catalog) decipherURL(ctx context.Context, id string, format yt.Format) 
 		}
 		program, err := preprocessPlayer(player)
 		if err != nil {
+			log.Printf("player program rejected (%d bytes): %v", len(player), errors.Unwrap(err))
+			_ = os.WriteFile("/tmp/ytm-player-rejected.js", []byte(player), 0600)
 			return "", err
 		}
 		c.playerSource = program

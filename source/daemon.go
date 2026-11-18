@@ -22,16 +22,6 @@ func packageRoot() string {
 	return "/data/yam"
 }
 
-func bundledMedia(action string) error {
-	cmd := exec.Command(filepath.Join(packageRoot(), "bin", "alice-media"), action)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("встроенный медиаслой (%s): %w", action, err)
-	}
-	return nil
-}
-
 func daemon(action string) error {
 	switch action {
 	case "start":
@@ -109,16 +99,6 @@ func daemon(action string) error {
 		}
 		if action == "uninstall" {
 			if err := daemon("stop"); err != nil {
-				return err
-			}
-			if err := bundledMedia("uninstall"); err != nil {
-				return err
-			}
-		} else {
-			if err := bundledMedia("install"); err != nil {
-				return err
-			}
-			if err := bundledMedia("start"); err != nil {
 				return err
 			}
 		}

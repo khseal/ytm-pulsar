@@ -47,7 +47,7 @@ func TestWebLocalAccessNeedsNoCodeAndAssetsStayBounded(t *testing.T) {
 			t.Fatalf("unexpected exposed file: %s", path)
 		}
 	}
-	if out := panelRequest(p, "POST", "/api/command", `{"action":"announce-off"}`, "http://alice.lan", false); out.Code != 200 {
+	if out := panelRequest(p, "POST", "/api/command", `{"action":"shuffle-off"}`, "http://alice.lan", false); out.Code != 200 {
 		t.Fatal(out.Body.String())
 	}
 }
@@ -87,7 +87,7 @@ func TestWebFollowsConnectionAddressChangesWithoutRestart(t *testing.T) {
 		for _, method := range []string{"GET", "POST"} {
 			path, body := "/api/state", ""
 			if method == "POST" {
-				path, body = "/api/command", `{"action":"announce-off"}`
+				path, body = "/api/command", `{"action":"shuffle-off"}`
 			}
 			req := httptest.NewRequest(method, "http://"+host+path, strings.NewReader(body))
 			req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: ip, Port: 80}))

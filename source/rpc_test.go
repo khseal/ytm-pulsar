@@ -108,21 +108,13 @@ func TestJumpUsesQueueAndRejectsInvalidIndexWithoutChangingIt(t *testing.T) {
 	}
 }
 
-type inputBuffer struct{ bytes.Buffer }
-
-func (b *inputBuffer) Close() error { return nil }
-
 func TestToggleUsesActualPlayerState(t *testing.T) {
 	t.Setenv("YTM_ALICE_DATA", t.TempDir())
-	input := &inputBuffer{}
-	s := &Server{state: State{Status: "playing"}, player: &nativePlayer{in: input}}
+	s := &Server{state: State{Status: "playing"}, player: &nativePlayer{}}
 	for _, status := range []string{"paused", "playing", "paused"} {
 		result := s.command(context.Background(), request{Action: "toggle"})
 		if result.Error != "" || result.State.Status != status {
 			t.Fatalf("toggle failed: %+v", result)
 		}
-	}
-	if input.String() != "pause\nresume\npause\n" {
-		t.Fatalf("wrong player commands: %q", input.String())
 	}
 }

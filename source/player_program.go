@@ -31,14 +31,19 @@ func playerAssignment(op js.TokenType) bool {
 // Mirror the yt-dlp/ejs 0.8.0 preprocessing with a native parser. Meriyah's
 // JavaScript AST takes over 25s on a Station Micro. This only parses text;
 // all execution stays in the memory- and time-bounded isolated helper.
+type playerRejected struct{ reason error }
+
+func (e playerRejected) Error() string { return "YouTube изменил структуру декодера аудиопотока" }
+func (e playerRejected) Unwrap() error { return e.reason }
+
 func preprocessPlayer(source string) (string, error) {
-	invalid := errors.New("YouTube изменил структуру декодера аудиопотока")
+	invalid := playerRejected{errors.New("unexpected top-level structure")}
 	if len(source) > 4<<20 {
-		return "", invalid
+		return "", playerRejected{errors.New("player larger than 4 MiB")}
 	}
 	program, err := js.Parse(parse.NewInputString(source), js.Options{})
 	if err != nil {
-		return "", invalid
+		return "", playerRejected{err}
 	}
 	var body *js.BlockStmt
 	skip := 0
@@ -68,9 +73,13 @@ func preprocessPlayer(source string) (string, error) {
 		return "", invalid
 	}
 	names := []string{}
+	shaped := []string{}
 	candidate := func(name js.IExpr, function *js.FuncDecl) {
 		if function.Async {
 			return
+		}
+		if urlFactoryShape(function) {
+			shaped = append(shaped, playerText(name))
 		}
 		for _, statement := range function.Body.List {
 			expression, ok := statement.(*js.ExprStmt)
@@ -148,7 +157,12 @@ func preprocessPlayer(source string) (string, error) {
 		kept = append(kept, statement)
 	}
 	if len(names) == 0 {
-		return "", invalid
+		// Players with a string table write set('alr','yes') as
+		// a[g.d[e^7910]](g.d[e^6527],g.d[e^6786]); fall back to the shape.
+		names = shaped
+	}
+	if len(names) == 0 {
+		return "", playerRejected{errors.New("no transform function with set('alr','yes')")}
 	}
 	body.List = kept
 	var code strings.Builder
@@ -179,13 +193,70 @@ func preprocessPlayer(source string) (string, error) {
 	}
 	generated, err := js.Parse(parse.NewInputString(code.String()), js.Options{})
 	if err != nil {
-		return "", invalid
+		return "", playerRejected{err}
 	}
 	body.List = append(body.List, generated.List...)
 	var output strings.Builder
 	output.WriteString(playerPrelude)
 	program.JS(&output)
 	return output.String(), nil
+}
+
+func playerText(node js.INode) string {
+	var text strings.Builder
+	node.JS(&text)
+	return text.String()
+}
+
+// urlFactoryShape matches function(a,b,c){...;a=new U(a,!0);a[set](x,y);...;return a}:
+// the URL factory the transforms hang off, recognised without its literals.
+func urlFactoryShape(function *js.FuncDecl) bool {
+	params := function.Params.List
+	list := function.Body.List
+	if len(params) < 2 || len(list) < 3 {
+		return false
+	}
+	first, ok := params[0].Binding.(*js.Var)
+	if !ok {
+		return false
+	}
+	param := playerText(first)
+	if ret, ok := list[len(list)-1].(*js.ReturnStmt); !ok || ret.Value == nil || playerText(ungroupPlayer(ret.Value)) != param {
+		return false
+	}
+	for i := 0; i+1 < len(list)-1; i++ {
+		statement, ok := list[i].(*js.ExprStmt)
+		if !ok {
+			continue
+		}
+		assign, ok := ungroupPlayer(statement.Value).(*js.BinaryExpr)
+		if !ok || assign.Op != js.EqToken || playerText(ungroupPlayer(assign.X)) != param {
+			continue
+		}
+		create, ok := ungroupPlayer(assign.Y).(*js.NewExpr)
+		if !ok || create.Args == nil || len(create.Args.List) != 2 || playerText(ungroupPlayer(create.Args.List[0].Value)) != param {
+			continue
+		}
+		if flag, ok := ungroupPlayer(create.Args.List[1].Value).(*js.UnaryExpr); !ok || flag.Op != js.NotToken {
+			continue
+		}
+		next, ok := list[i+1].(*js.ExprStmt)
+		if !ok {
+			return false
+		}
+		call, ok := ungroupPlayer(next.Value).(*js.CallExpr)
+		if !ok || len(call.Args.List) != 2 {
+			return false
+		}
+		switch member := ungroupPlayer(call.X).(type) {
+		case *js.DotExpr:
+			return playerText(ungroupPlayer(member.X)) == param
+		case *js.IndexExpr:
+			return playerText(ungroupPlayer(member.X)) == param
+		}
+		return false
+	}
+	return false
 }
 
 // Browser globals supplied by the upstream EJS preprocessing stage.

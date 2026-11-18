@@ -34,7 +34,6 @@ const (
 	castPort       = 8008
 	castPrefix     = "/ytcr"
 	loungeBase     = "https://www.youtube.com/api/lounge"
-	castTheme      = "m" // YouTube Music senders
 	castScreenApp  = "ytcr"
 	ssdpAddr       = "239.255.255.250:1900"
 	dialServiceURN = "urn:dial-multiscreen-org:service:dial:1"
@@ -45,6 +44,7 @@ type castConfig struct {
 	DeviceID string `json:"device_id"`
 	ScreenID string `json:"screen_id"`
 	Name     string `json:"name"`
+	Theme    string `json:"theme,omitempty"`
 }
 
 type castMessage struct {
@@ -78,6 +78,14 @@ type castReceiver struct {
 	lastPosAt  time.Time
 	sendMu     sync.Mutex
 	session    context.CancelFunc
+	// The lounge only pairs senders of the screen's theme: "m" for YouTube
+	// Music apps, "cl" for YouTube and browsers. A DIAL launch switches it.
+	theme   string
+	restart bool // reconnect without backoff: the session ended on purpose
+
+	volWant    int
+	volAt      time.Time
+	volPending bool
 }
 
 func castEnabled() bool { return os.Getenv("YTM_ALICE_CAST") != "0" }
@@ -132,7 +140,10 @@ func (s *Server) castLoop(ctx context.Context) {
 	if !castEnabled() {
 		return
 	}
-	c := &castReceiver{s: s, http: &http.Client{Timeout: 0}, cfg: loadCastConfig()}
+	c := &castReceiver{s: s, http: &http.Client{Timeout: 0}, cfg: loadCastConfig(), theme: "m"}
+	if c.cfg.Theme == "cl" {
+		c.theme = "cl"
+	}
 	c.saveConfig()
 	go c.serveDIAL(ctx)
 	go c.serveSSDP(ctx)
@@ -144,8 +155,16 @@ func (s *Server) castLoop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if time.Since(start) > 2*time.Minute {
+		if time.Since(start) > time.Minute {
 			backoff = 5 * time.Second
+		}
+		c.mu.Lock()
+		restart := c.restart
+		c.restart = false
+		c.sid, c.gsid = "", ""
+		c.mu.Unlock()
+		if restart {
+			continue
 		}
 		log.Printf("cast: lounge session ended: %v; retry in %s", err, backoff)
 		select {
@@ -293,6 +312,11 @@ func (c *castReceiver) serveDIAL(ctx context.Context) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			if err := c.useTheme(r.Context(), theme); err != nil {
+				log.Print("cast: switch theme: ", err)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			if err := c.registerPairingCode(r.Context(), code); err != nil {
 				log.Print("cast: register pairing code: ", err)
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -368,6 +392,43 @@ func (c *castReceiver) loungeToken(ctx context.Context) (string, int64, error) {
 	return v.Screens[0].LoungeToken, v.Screens[0].RefreshInterval, nil
 }
 
+// useTheme rebinds the lounge session for a sender of another theme and
+// waits until the new session is ready to accept its pairing code.
+func (c *castReceiver) useTheme(ctx context.Context, theme string) error {
+	if theme != "m" && theme != "cl" {
+		return nil
+	}
+	c.mu.Lock()
+	if c.theme == theme {
+		c.mu.Unlock()
+		return nil
+	}
+	log.Printf("cast: lounge theme %s -> %s", c.theme, theme)
+	c.theme = theme
+	c.cfg.Theme = theme
+	c.restart = true
+	if c.session != nil {
+		c.session()
+	}
+	c.mu.Unlock()
+	c.saveConfig()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+		c.mu.Lock()
+		ready := !c.restart && c.sid != "" && c.gsid != ""
+		c.mu.Unlock()
+		if ready {
+			return nil
+		}
+	}
+	return errors.New("lounge session not ready")
+}
+
 func (c *castReceiver) registerPairingCode(ctx context.Context, code string) error {
 	c.mu.Lock()
 	screen := c.cfg.ScreenID
@@ -400,7 +461,7 @@ func (c *castReceiver) bindQuery(kind string) string {
 	v.Set("obfuscatedGaiaId", "")
 	v.Set("name", c.cfg.Name)
 	v.Set("app", castScreenApp)
-	v.Set("theme", castTheme)
+	v.Set("theme", c.theme)
 	v.Set("capabilities", "dsp,mic,dpa,ntb")
 	v.Set("cst", "m")
 	v.Set("mdxVersion", "2")
@@ -526,7 +587,13 @@ func (c *castReceiver) runSession(ctx context.Context) error {
 	}
 	log.Printf("cast: lounge session ready as %q (DIAL :%d)", c.cfg.Name, castPort)
 	for _, m := range msgs {
-		if m.Name != "c" && m.Name != "S" {
+		switch m.Name {
+		case "c", "S":
+		case "setPlaylist", "updatePlaylist", "play", "pause", "seekTo", "next", "previous", "stopVideo", "forceDisconnect":
+			// The bind replays the lounge's last state, e.g. the playlist of
+			// an earlier sender; a connected remote sends its own commands.
+			log.Printf("cast: skip replayed %s", m.Name)
+		default:
 			c.handle(ctx, m)
 		}
 	}
@@ -534,34 +601,75 @@ func (c *castReceiver) runSession(ctx context.Context) error {
 		refresh = int64(12 * time.Hour / time.Millisecond)
 	}
 	deadline := time.Now().Add(time.Duration(refresh) * time.Millisecond)
+	failures := 0
 	for ctx.Err() == nil {
 		if time.Now().After(deadline) {
 			return errors.New("lounge token refresh")
 		}
-		if err := c.poll(ctx); err != nil {
+		started := time.Now()
+		err := c.poll(ctx)
+		if err == nil {
+			failures = 0
+			continue
+		}
+		var rejected castBindError
+		if ctx.Err() != nil || errors.As(err, &rejected) {
 			return err
+		}
+		// Some VPNs and proxies reset a long poll that stays idle for ~20 s.
+		// The session is still valid: reopen the poll instead of re-pairing.
+		if time.Since(started) > 10*time.Second {
+			failures = 0
+		}
+		if failures++; failures > 3 {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
 		}
 	}
 	return ctx.Err()
 }
+
+const castPollIdle = 70 * time.Second
+
+// castBindError is a bind request YouTube refused, e.g. an expired session.
+type castBindError struct{ status int }
+
+func (e castBindError) Error() string { return fmt.Sprintf("bind rpc: HTTP %d", e.status) }
 
 // poll holds one long-poll RPC connection open and dispatches its messages.
 func (c *castReceiver) poll(ctx context.Context) error {
 	c.mu.Lock()
 	q := c.bindQuery("rpc")
 	c.mu.Unlock()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, loungeBase+"/bc/bind?"+q, nil)
+	// YouTube sends noop on an open poll every ~30 s. A proxy that drops the
+	// connection without a reset leaves the poll silent forever; reopen it.
+	pctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	idle := time.AfterFunc(castPollIdle, cancel)
+	defer idle.Stop()
+	started := time.Now()
+	req, _ := http.NewRequestWithContext(pctx, http.MethodGet, loungeBase+"/bc/bind?"+q, nil)
 	resp, err := c.http.Do(req)
 	if err != nil {
+		log.Printf("cast: poll failed after %s: %v", time.Since(started).Round(time.Second), err)
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("bind rpc: HTTP %d", resp.StatusCode)
+		return castBindError{resp.StatusCode}
 	}
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	defer func() {
+		if pctx.Err() != nil && ctx.Err() == nil {
+			log.Printf("cast: poll silent for %s, reopening", castPollIdle)
+		}
+	}()
 	for sc.Scan() {
+		idle.Reset(castPollIdle)
 		msgs := parseCastMessages(sc.Text())
 		if len(msgs) == 0 {
 			continue
@@ -671,6 +779,11 @@ func navInfo(st State) castOut {
 }
 
 func alsaVolume() (int, bool) {
+	if c := pulsarAPI.Load(); c != nil {
+		if level, muted, ok := c.reportedVolume(); ok {
+			return level, muted
+		}
+	}
 	out, err := exec.Command("amixer", "-c0", "sget", "Master").Output()
 	if err != nil {
 		return 0, false
@@ -690,12 +803,44 @@ func setAlsaVolume(level int) {
 	if level > 100 {
 		level = 100
 	}
-	exec.Command("amixer", "-q", "-c0", "sset", "Master", strconv.Itoa(level)+"%").Run()
+	// Pulsar keeps its own volume state and would overwrite a direct ALSA change.
+	if c := pulsarAPI.Load(); c != nil {
+		if err := c.volume(float32(level) / 100); err != nil {
+			log.Print("Pulsar volume: ", err)
+		}
+	}
 }
 
-func volumeMsg() castOut {
+// volumeMsg reports the volume. Pulsar confirms a change a moment later, so
+// right after a set the requested level is reported, not the previous one.
+func (c *castReceiver) volumeMsg() castOut {
 	v, muted := alsaVolume()
+	c.mu.Lock()
+	if time.Since(c.volAt) < 3*time.Second {
+		v = c.volWant
+	}
+	c.mu.Unlock()
 	return castOut{"onVolumeChanged", map[string]string{"volume": strconv.Itoa(v), "muted": strconv.FormatBool(muted)}}
+}
+
+// setVolume coalesces a slider drag (dozens of setVolume per second) into one
+// Pulsar command and one confirmation with the last level.
+func (c *castReceiver) setVolume(ctx context.Context, level int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.volWant, c.volAt = min(max(level, 0), 100), time.Now()
+	if c.volPending {
+		return
+	}
+	c.volPending = true
+	time.AfterFunc(150*time.Millisecond, func() {
+		c.mu.Lock()
+		level := c.volWant
+		c.volPending = false
+		c.mu.Unlock()
+		setAlsaVolume(level)
+		c.send(ctx, c.volumeMsg())
+	})
 }
 
 // reportLoop pushes player changes to connected senders.
@@ -783,13 +928,13 @@ func (c *castReceiver) handle(ctx context.Context, m castMessage) {
 		c.lastSig = ""
 		c.mu.Unlock()
 		go c.send(ctx, navInfo(st), c.nowPlaying(st), c.stateChange(st),
-			castOut{"onAutoplayModeChanged", map[string]string{"autoplayMode": "UNSUPPORTED"}}, volumeMsg())
+			castOut{"onAutoplayModeChanged", map[string]string{"autoplayMode": "UNSUPPORTED"}}, c.volumeMsg())
 	case "remoteConnected":
 		c.mu.Lock()
 		c.senders++
 		c.lastSig = ""
 		c.mu.Unlock()
-		go c.send(ctx, navInfo(st), c.nowPlaying(st), c.stateChange(st), volumeMsg())
+		go c.send(ctx, navInfo(st), c.nowPlaying(st), c.stateChange(st), c.volumeMsg())
 	case "remoteDisconnected":
 		c.mu.Lock()
 		if c.senders > 0 {
@@ -799,20 +944,28 @@ func (c *castReceiver) handle(ctx context.Context, m castMessage) {
 	case "getNowPlaying":
 		go c.send(ctx, c.nowPlaying(st))
 	case "getVolume":
-		go c.send(ctx, volumeMsg())
+		go c.send(ctx, c.volumeMsg())
 	case "setVolume":
 		if v, err := strconv.Atoi(pstr(m.Payload, "volume")); err == nil {
-			setAlsaVolume(v)
+			c.setVolume(ctx, v)
 		}
-		go c.send(ctx, volumeMsg())
 	case "setAutoplayMode":
 		go c.send(ctx, castOut{"onAutoplayModeChanged", map[string]string{"autoplayMode": "UNSUPPORTED"}})
 	case "setPlaylist", "updatePlaylist":
 		go c.loadPlaylist(ctx, m)
-	case "play":
-		go c.s.command(ctx, request{Action: "resume"})
-	case "pause":
-		go c.s.command(ctx, request{Action: "pause"})
+	case "play", "pause":
+		action := map[string]string{"play": "resume", "pause": "pause"}[m.Name]
+		go func() {
+			c.s.command(ctx, request{Action: action})
+			// Acknowledge at once: a sender that does not see the new state
+			// soon enough seeks to resynchronise.
+			st := c.s.snapshot()
+			c.mu.Lock()
+			c.lastSig = ""
+			c.lastPosMS, c.lastPosAt = st.PositionMS, time.Now()
+			c.mu.Unlock()
+			c.send(ctx, c.stateChange(st))
+		}()
 	case "stopVideo":
 		c.mu.Lock()
 		c.listID = ""
@@ -823,6 +976,12 @@ func (c *castReceiver) handle(ctx context.Context, m castMessage) {
 	case "seekTo":
 		if f, err := strconv.ParseFloat(pstr(m.Payload, "newTime"), 64); err == nil && !math.IsNaN(f) && f >= 0 && f <= 7200 {
 			ms := int64(f * 1000)
+			if d := ms - st.PositionMS; d > -3000 && d < 3000 && (st.Status == "playing" || st.Status == "paused") {
+				// Senders resynchronise with a seek to where the track already
+				// is; restarting the player for it is an audible gap.
+				go c.send(ctx, c.stateChange(st))
+				return
+			}
 			// Acknowledge at once: the sender waits for the new position.
 			loading := c.stateChange(st)
 			loading.payload["state"] = "3"
@@ -925,7 +1084,7 @@ func (s *Server) castPlay(tracks []Track, idx int, offset int64) {
 	s.state.Error = ""
 	s.saveLocked()
 	s.mu.Unlock()
-	s.start(offset, false)
+	s.start(offset)
 }
 
 func (s *Server) castUpdateQueue(tracks []Track) {

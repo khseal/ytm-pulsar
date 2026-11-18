@@ -8,6 +8,7 @@ import (
 	"fmt"
 	yt "github.com/kkdai/youtube/v2"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -123,6 +124,8 @@ type streamInfo struct {
 	until                         time.Time
 	id                            string
 	initEnd, indexStart, indexEnd int64
+	// A live stream has no length; Pulsar plays its HLS manifest directly.
+	live bool
 }
 
 var videoID = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
@@ -543,6 +546,21 @@ func (c *Catalog) resolve(ctx context.Context, id string) (streamInfo, error) {
 	if err != nil {
 		return streamInfo{}, err
 	}
+	if v.HLSManifestURL != "" && !hasAudioLength(v.Formats) {
+		u, e := url.Parse(v.HLSManifestURL)
+		if e != nil || u.Scheme != "https" || !(strings.HasSuffix(u.Hostname(), ".googlevideo.com") || strings.HasSuffix(u.Hostname(), ".youtube.com")) {
+			return streamInfo{}, errors.New("YouTube: некорректная ссылка на прямой эфир")
+		}
+		link := v.HLSManifestURL
+		if audio, err := c.liveAudioPlaylist(ctx, link); err == nil {
+			link = audio
+		} else {
+			log.Printf("live track=%s: master playlist kept: %s", id, logSafe(err.Error()))
+		}
+		s := streamInfo{url: link, mime: "application/x-mpegurl", until: time.Now().Add(30 * time.Minute), id: id, live: true}
+		c.streams[id] = s
+		return s, nil
+	}
 	formats := v.Formats.WithAudioChannels()
 	formats.Sort()
 	var streamErr error
@@ -588,4 +606,67 @@ func (c *Catalog) resolve(ctx context.Context, id string) (streamInfo, error) {
 		return streamInfo{}, streamErr
 	}
 	return streamInfo{}, errors.New("YouTube: подходящий аудиопоток отсутствует")
+}
+
+var hlsAttr = regexp.MustCompile(`([A-Z0-9-]+)=("[^"]*"|[^,]*)`)
+
+// liveAudioPlaylist picks the audio-only rendition of a live master playlist.
+// YouTube serves live audio and video separately; given the master playlist,
+// GStreamer adapts on the video variants, up to 1080p, and the audio stalls
+// while they download. Group 234 is AAC-LC ~128 kbit/s, 233 HE-AAC ~48 kbit/s.
+func (c *Catalog) liveAudioPlaylist(ctx context.Context, master string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, master, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("master playlist: HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	best, bestRank := "", 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "#EXT-X-MEDIA:") {
+			continue
+		}
+		attrs := map[string]string{}
+		for _, m := range hlsAttr.FindAllStringSubmatch(strings.TrimSpace(line[len("#EXT-X-MEDIA:"):]), -1) {
+			attrs[m[1]] = strings.Trim(m[2], `"`)
+		}
+		if attrs["TYPE"] != "AUDIO" || attrs["URI"] == "" {
+			continue
+		}
+		rank := map[string]int{"234": 3, "233": 2}[attrs["GROUP-ID"]]
+		if rank == 0 {
+			rank = 1
+		}
+		if rank > bestRank {
+			best, bestRank = attrs["URI"], rank
+		}
+	}
+	u, err := url.Parse(best)
+	if best == "" || err != nil || u.Scheme != "https" || !strings.HasSuffix(u.Hostname(), ".googlevideo.com") {
+		return "", errors.New("no audio rendition")
+	}
+	return best, nil
+}
+
+// hasAudioLength reports a downloadable audio file; live streams list
+// formats without a length.
+func hasAudioLength(formats yt.FormatList) bool {
+	for _, f := range formats {
+		if f.AudioChannels > 0 && f.ContentLength > 0 {
+			return true
+		}
+	}
+	return false
 }

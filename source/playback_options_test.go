@@ -52,24 +52,6 @@ func TestAlbumTracksTakeTheHeaderArtist(t *testing.T) {
 	}
 }
 
-func TestYouTubeOnlyLeavesMusicToAlicesAnswer(t *testing.T) {
-	s := &Server{settings: &Settings{YouTubeOnly: true, VoiceCommands: map[string]string{"моя подборка": "play"}}}
-	for _, text := range []string{"поставь song one", "включи песню song two", "включи альбом album one"} {
-		if a, q, ok := s.voiceAction(text); ok {
-			t.Errorf("%q kept by the text route: %s %q", text, a, q)
-		}
-	}
-	for text, want := range map[string]string{"включи на ютубе song one": "play", "дальше": "next", "включи мои лайки": "play", "что играет": "what"} {
-		if a, _, ok := s.voiceAction(text); !ok || a != want {
-			t.Errorf("%q: %s %v, want %s", text, a, ok, want)
-		}
-	}
-	off := &Server{settings: &Settings{}}
-	if a, q, ok := off.voiceAction("поставь song one"); !ok || a != "play" || q != "song one" {
-		t.Fatalf("without youtube_only the upstream route stays: %s %q %v", a, q, ok)
-	}
-}
-
 func TestRecommendationsSkipVideoVersionsOfTheSameSong(t *testing.T) {
 	mix := []Track{
 		{ID: "a1", Artists: "Artist A и Artist B", Title: "Song One"},
