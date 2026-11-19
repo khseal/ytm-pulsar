@@ -2,29 +2,33 @@ package main
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"testing"
 )
 
-func TestPreferChartPlaylistUsesTheShortTrendingList(t *testing.T) {
-	page := map[string]any{
-		"contents": []any{
-			map[string]any{"musicTwoRowItemRenderer": map[string]any{
-				"title":              map[string]any{"runs": []any{map[string]any{"text": "Россия – 100 лучших клипов"}}},
-				"navigationEndpoint": map[string]any{"browseEndpoint": map[string]any{"browseId": "VLPL100"}},
-			}},
-			map[string]any{"musicTwoRowItemRenderer": map[string]any{
-				"title":              map[string]any{"runs": []any{map[string]any{"text": "Лучшие клипы за день – Россия"}}},
-				"navigationEndpoint": map[string]any{"browseEndpoint": map[string]any{"browseId": "VLPLDAY"}},
-			}},
-			map[string]any{"musicTwoRowItemRenderer": map[string]any{
-				"title":              map[string]any{"simpleText": "Россия – 20 трендовых клипов"},
-				"navigationEndpoint": map[string]any{"browseEndpoint": map[string]any{"browseId": "VLPL20"}},
-			}},
-		},
+func TestSurpriseQueriesMixGenres(t *testing.T) {
+	got := surpriseQueries(4, rand.New(rand.NewPCG(1, 2)))
+	if len(got) != 4 {
+		t.Fatalf("%v", got)
 	}
-	if got := preferChartPlaylist(chartPlaylists(page)); got != "VLPL20" {
-		t.Fatalf("playlist %s", got)
+	seen := map[string]bool{}
+	for _, query := range got {
+		matched := false
+		for _, genre := range surpriseGenres {
+			if query == genre || strings.HasPrefix(query, genre+" ") {
+				matched = true
+				break
+			}
+		}
+		if !matched || seen[query] {
+			t.Fatalf("query %q", query)
+		}
+		seen[query] = true
+	}
+	again := surpriseQueries(4, rand.New(rand.NewPCG(1, 2)))
+	if strings.Join(got, "|") != strings.Join(again, "|") {
+		t.Fatalf("seed changed the queries: %v vs %v", got, again)
 	}
 }
 

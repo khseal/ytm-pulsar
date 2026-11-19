@@ -5,51 +5,78 @@ import (
 	"errors"
 	"math/rand/v2"
 	"regexp"
-	"sort"
-	"strings"
 )
 
-const surpriseLimit = 15
+const (
+	surpriseLimit    = 15
+	surpriseSearches = 4
+)
 
-type chartList struct {
-	title, id string
+// Broad genres, not the current chart. A random mood or year is added so two
+// clicks do not search the same thing.
+var surpriseGenres = []string{
+	"джаз", "блюз", "соул", "фанк", "диско", "босса-нова", "свинг",
+	"инди", "фолк", "авторская песня", "шансон", "романс", "баллада",
+	"рок", "панк", "постпанк", "метал", "новая волна",
+	"электроника", "синтипоп", "эмбиент", "техно", "хаус", "транс",
+	"хип-хоп", "регги", "ска", "латина", "фламенко", "кантри",
+	"классика", "фортепиано", "гитара", "саксофон",
+	"city pop", "lo-fi", "synthwave", "k-pop", "j-pop",
+	"французские песни", "итальянские песни", "грузинские песни",
+	"армянские песни", "японские песни", "бразильские песни",
+	"турецкие песни", "немецкие песни", "скандинавский фолк",
 }
 
-// surprise adds a random sample of songs that are popular right now.
-// The short trending chart comes first. Remixes, covers and very long mixes
-// stay out, and the queue that is already playing is not replaced.
-func (c *Catalog) surprise(ctx context.Context, queue []Track) ([]Track, error) {
-	page, err := c.request(ctx, "browse", map[string]any{
-		"browseId": "FEmusic_charts",
-		"formData": map[string]any{"selectedValues": []string{"RU"}},
-	})
-	if err != nil {
-		page, err = c.request(ctx, "browse", map[string]any{"browseId": "FEmusic_charts"})
-		if err != nil {
-			return nil, err
-		}
+var surpriseModifiers = []string{
+	"", "ночь", "утро", "дождь", "город", "дорога", "любовь", "осень",
+	"зима", "лето", "море", "тишина", "танец", "память", "письмо",
+	"окно", "поезд", "1978", "1986", "1994", "2003", "акустика",
+}
+
+func surpriseQueries(n int, rng *rand.Rand) []string {
+	if n > len(surpriseGenres) {
+		n = len(surpriseGenres)
 	}
-	lists := orderedChartPlaylists(chartPlaylists(page))
+	if n <= 0 {
+		return nil
+	}
+	order := rng.Perm(len(surpriseGenres))
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		query := surpriseGenres[order[i]]
+		if mod := surpriseModifiers[rng.IntN(len(surpriseModifiers))]; mod != "" {
+			query += " " + mod
+		}
+		out = append(out, query)
+	}
+	return out
+}
+
+// surprise adds songs from several random genre searches. The top few hits of
+// each search are skipped, remixes stay out, and the current queue is kept.
+func (c *Catalog) surprise(ctx context.Context, queue []Track) ([]Track, error) {
+	rng := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	var pool []Track
-	for _, list := range lists {
+	var last error
+	for _, query := range surpriseQueries(surpriseSearches, rng) {
 		if ctx.Err() != nil {
 			break
 		}
-		playlist, err := c.request(ctx, "browse", map[string]any{"browseId": list.id})
+		tracks, err := c.lookup(ctx, query)
 		if err != nil {
+			last = err
 			continue
 		}
-		pool = append(pool, parseTracks(playlist)...)
-		if len(surpriseTracks(queue, pool, surpriseLimit)) >= surpriseLimit {
-			break
+		if len(tracks) > 8 {
+			tracks = tracks[3:]
 		}
+		pool = append(pool, tracks...)
 	}
 	if len(pool) == 0 {
-		if tracks := parseTracks(page); len(tracks) > 0 {
-			pool = tracks
-		} else {
-			return nil, errors.New("YouTube Music не вернул популярные треки")
+		if last != nil {
+			return nil, last
 		}
+		return nil, errors.New("YouTube Music не нашёл случайные треки")
 	}
 	added := surpriseTracks(queue, pool, 0)
 	if len(added) == 0 {
@@ -60,66 +87,6 @@ func (c *Catalog) surprise(ctx context.Context, queue []Track) ([]Track, error) 
 		added = added[:surpriseLimit]
 	}
 	return added, nil
-}
-
-func chartPlaylists(root any) []chartList {
-	var out []chartList
-	var walk func(any)
-	walk = func(x any) {
-		switch v := x.(type) {
-		case map[string]any:
-			if item, ok := v["musicTwoRowItemRenderer"].(map[string]any); ok {
-				id := str(get(item, "navigationEndpoint", "browseEndpoint", "browseId"))
-				title := text(get(item, "title"))
-				if strings.HasPrefix(id, "VL") && title != "" {
-					out = append(out, chartList{title: title, id: id})
-				}
-				return
-			}
-			keys := make([]string, 0, len(v))
-			for key := range v {
-				keys = append(keys, key)
-			}
-			sort.Strings(keys)
-			for _, key := range keys {
-				walk(v[key])
-			}
-		case []any:
-			for _, item := range v {
-				walk(item)
-			}
-		}
-	}
-	walk(root)
-	return out
-}
-
-// A short trending list is fresher and smaller than the top-100 chart.
-func chartPlaylistRank(title string) int {
-	t := strings.ToLower(title)
-	switch {
-	case strings.Contains(t, "20") || strings.Contains(t, "тренд") || strings.Contains(t, "trend"):
-		return 0
-	case strings.Contains(t, "день") || strings.Contains(t, "daily") || strings.Contains(t, "today"):
-		return 1
-	default:
-		return 2
-	}
-}
-
-func orderedChartPlaylists(lists []chartList) []chartList {
-	sort.SliceStable(lists, func(i, j int) bool {
-		return chartPlaylistRank(lists[i].title) < chartPlaylistRank(lists[j].title)
-	})
-	return lists
-}
-
-func preferChartPlaylist(lists []chartList) string {
-	lists = orderedChartPlaylists(lists)
-	if len(lists) == 0 {
-		return ""
-	}
-	return lists[0].id
 }
 
 // Remix and cover uploads crowd out the song that is actually in the chart.
