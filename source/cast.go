@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	yt "github.com/kkdai/youtube/v2"
 )
 
 const (
@@ -83,8 +85,6 @@ type castReceiver struct {
 	theme   string
 	restart bool // reconnect without backoff: the session ended on purpose
 
-	volWant    int
-	volAt      time.Time
 	volPending bool
 }
 
@@ -778,22 +778,60 @@ func navInfo(st State) castOut {
 	}}
 }
 
-func alsaVolume() (int, bool) {
+func readVolume() (int, bool, bool) {
 	if c := pulsarAPI.Load(); c != nil {
 		if level, muted, ok := c.reportedVolume(); ok {
-			return level, muted
+			return level, muted, true
 		}
 	}
 	out, err := exec.Command("amixer", "-c0", "sget", "Master").Output()
 	if err != nil {
-		return 0, false
+		return 0, false, false
 	}
 	m := regexp.MustCompile(`\[(\d+)%\]`).FindStringSubmatch(string(out))
 	if m == nil {
-		return 0, false
+		return 0, false, false
 	}
 	v, _ := strconv.Atoi(m[1])
-	return v, strings.Contains(string(out), "[off]")
+	return v, strings.Contains(string(out), "[off]"), true
+}
+
+// A slider sends a level many times a second. One command carries the last
+// level; until Pulsar confirms it, that level is what the panel and Cast show.
+var volumeCtl struct {
+	mu      sync.Mutex
+	want    int
+	at      time.Time
+	pending bool
+}
+
+func requestVolume(level int) {
+	level = min(max(level, 0), 100)
+	volumeCtl.mu.Lock()
+	volumeCtl.want, volumeCtl.at = level, time.Now()
+	if volumeCtl.pending {
+		volumeCtl.mu.Unlock()
+		return
+	}
+	volumeCtl.pending = true
+	volumeCtl.mu.Unlock()
+	time.AfterFunc(150*time.Millisecond, func() {
+		volumeCtl.mu.Lock()
+		level := volumeCtl.want
+		volumeCtl.pending = false
+		volumeCtl.mu.Unlock()
+		setAlsaVolume(level)
+	})
+}
+
+func shownVolume() (int, bool, bool) {
+	level, muted, ok := readVolume()
+	volumeCtl.mu.Lock()
+	defer volumeCtl.mu.Unlock()
+	if !volumeCtl.at.IsZero() && time.Since(volumeCtl.at) < 3*time.Second {
+		return volumeCtl.want, muted, true
+	}
+	return level, muted, ok
 }
 
 func setAlsaVolume(level int) {
@@ -814,31 +852,23 @@ func setAlsaVolume(level int) {
 // volumeMsg reports the volume. Pulsar confirms a change a moment later, so
 // right after a set the requested level is reported, not the previous one.
 func (c *castReceiver) volumeMsg() castOut {
-	v, muted := alsaVolume()
-	c.mu.Lock()
-	if time.Since(c.volAt) < 3*time.Second {
-		v = c.volWant
-	}
-	c.mu.Unlock()
+	v, muted, _ := shownVolume()
 	return castOut{"onVolumeChanged", map[string]string{"volume": strconv.Itoa(v), "muted": strconv.FormatBool(muted)}}
 }
 
-// setVolume coalesces a slider drag (dozens of setVolume per second) into one
-// Pulsar command and one confirmation with the last level.
+// setVolume applies the level once per drag and confirms it to the sender.
 func (c *castReceiver) setVolume(ctx context.Context, level int) {
+	requestVolume(level)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.volWant, c.volAt = min(max(level, 0), 100), time.Now()
 	if c.volPending {
 		return
 	}
 	c.volPending = true
 	time.AfterFunc(150*time.Millisecond, func() {
 		c.mu.Lock()
-		level := c.volWant
 		c.volPending = false
 		c.mu.Unlock()
-		setAlsaVolume(level)
 		c.send(ctx, c.volumeMsg())
 	})
 }
@@ -1012,32 +1042,44 @@ func (c *castReceiver) loadPlaylist(ctx context.Context, m castMessage) {
 		}
 		return
 	}
+	// videoId is the video the sender is actually showing. currentIndex often
+	// still points at the previous one, and that id may not be in videoIds yet.
+	target := castPlaylistTarget(m.Name, m.Payload, ids)
 	tracks := c.s.castTracks(ctx, ids)
+	if target != "" {
+		var found bool
+		for i, t := range tracks {
+			if t.ID == target {
+				tracks[i] = c.s.enrichCastTrack(ctx, t)
+				found = true
+				break
+			}
+		}
+		if !found {
+			tracks = append(tracks, c.s.enrichCastTrack(ctx, Track{ID: target, Title: target, ThumbnailURL: fallbackThumbnail(target)}))
+		}
+	}
 	c.mu.Lock()
 	c.listID = listID
 	c.lastSig = ""
 	c.mu.Unlock()
-	if m.Name == "updatePlaylist" {
-		c.s.castUpdateQueue(tracks)
-		return
-	}
-	idx, _ := strconv.Atoi(pstr(m.Payload, "currentIndex"))
-	if want := pstr(m.Payload, "videoId"); want != "" && (idx < 0 || idx >= len(tracks) || tracks[idx].ID != want) {
-		for i, t := range tracks {
-			if t.ID == want {
-				idx = i
-				break
-			}
+	idx := -1
+	for i, t := range tracks {
+		if t.ID == target {
+			idx = i
+			break
 		}
 	}
-	if idx < 0 || idx >= len(tracks) {
-		idx = 0
+	// Same video again: refresh the queue, do not restart playback.
+	if idx < 0 {
+		c.s.castUpdateQueue(tracks)
+		go c.s.enrichCastQueue(context.Background())
+		return
 	}
-	// Senders repeat setPlaylist for the same track; keep playing instead of
-	// resolving the stream again.
 	if st := c.s.snapshot(); st.Index >= 0 && st.Index < len(st.Queue) && st.Queue[st.Index].ID == tracks[idx].ID &&
 		(st.Status == "playing" || st.Status == "paused" || st.Status == "buffering") {
 		c.s.castUpdateQueue(tracks)
+		go c.s.enrichCastQueue(context.Background())
 		return
 	}
 	offset := int64(0)
@@ -1045,6 +1087,45 @@ func (c *castReceiver) loadPlaylist(ctx context.Context, m castMessage) {
 		offset = int64(f * 1000)
 	}
 	c.s.castPlay(tracks, idx, offset)
+	go c.s.enrichCastQueue(context.Background())
+}
+
+// castPlaylistTarget is the video setPlaylist must play. updatePlaylist
+// switches only when the sender selected a video; a plain update keeps
+// whatever is already playing.
+func castPlaylistTarget(name string, payload any, ids []string) string {
+	if name == "updatePlaylist" {
+		if id, ok := playlistEventVideo(payload); ok {
+			return id
+		}
+		return ""
+	}
+	if id := pstr(payload, "videoId"); videoID.MatchString(id) {
+		return id
+	}
+	idx, err := strconv.Atoi(pstr(payload, "currentIndex"))
+	if err == nil && idx >= 0 && idx < len(ids) {
+		return ids[idx]
+	}
+	if len(ids) > 0 {
+		return ids[0]
+	}
+	return ""
+}
+
+func playlistEventVideo(payload any) (string, bool) {
+	raw := pstr(payload, "eventDetails")
+	if raw == "" {
+		return "", false
+	}
+	var details struct {
+		EventType string `json:"eventType"`
+		VideoID   string `json:"videoId"`
+	}
+	if json.Unmarshal([]byte(raw), &details) != nil || details.EventType != "VIDEO_SELECTED" || !videoID.MatchString(details.VideoID) {
+		return "", false
+	}
+	return details.VideoID, true
 }
 
 // castTracks resolves titles for the sender's queue; unknown ids keep a placeholder.
@@ -1072,6 +1153,106 @@ func (s *Server) castTracks(ctx context.Context, ids []string) []Track {
 		}
 	}
 	return tracks
+}
+
+// enrichCastTrack fills a cast item the Music queue does not know: a normal
+// YouTube video arrives with its id as the title, no length and often no picture.
+func (s *Server) enrichCastTrack(ctx context.Context, t Track) Track {
+	if t.Title != "" && t.Title != t.ID && t.DurationMS > 0 && t.ThumbnailURL != "" {
+		return t
+	}
+	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	v, err := s.catalog.trackVideo(cctx, t.ID)
+	if err != nil || v == nil {
+		if t.Title == "" {
+			t.Title = t.ID
+		}
+		if t.ThumbnailURL == "" {
+			t.ThumbnailURL = fallbackThumbnail(t.ID)
+		}
+		return t
+	}
+	if v.Title != "" {
+		t.Title = v.Title
+	}
+	if v.Author != "" {
+		t.Artists = v.Author
+	}
+	if v.Duration > 0 {
+		t.DurationMS = v.Duration.Milliseconds()
+	}
+	if thumb := videoThumbnail(v); thumb != "" {
+		t.ThumbnailURL = thumb
+	} else if t.ThumbnailURL == "" {
+		t.ThumbnailURL = fallbackThumbnail(t.ID)
+	}
+	return t
+}
+
+func videoThumbnail(v *yt.Video) string {
+	if v == nil {
+		return ""
+	}
+	best, width := "", uint(0)
+	for _, thumb := range v.Thumbnails {
+		u := safeThumbnail(thumb.URL)
+		if u == "" {
+			continue
+		}
+		if thumb.Width >= width {
+			best, width = u, thumb.Width
+		}
+	}
+	return best
+}
+
+func needsCastMeta(t Track) bool {
+	return t.ID != "" && (t.Title == "" || t.Title == t.ID || t.ThumbnailURL == "")
+}
+
+func applyStreamMeta(t Track, src streamInfo) Track {
+	if (t.Title == "" || t.Title == t.ID) && src.title != "" {
+		t.Title = src.title
+	}
+	if t.Artists == "" && src.author != "" {
+		t.Artists = src.author
+	}
+	if t.DurationMS == 0 && src.durationMS > 0 {
+		t.DurationMS = src.durationMS
+	}
+	if src.thumbnail != "" && (t.ThumbnailURL == "" || t.ThumbnailURL == fallbackThumbnail(t.ID)) {
+		t.ThumbnailURL = src.thumbnail
+	}
+	return t
+}
+
+// enrichCastQueue fills the track on screen when a cast left only its id.
+// The rest of the queue is filled when playback actually reaches it.
+func (s *Server) enrichCastQueue(ctx context.Context) {
+	s.mu.Lock()
+	g := s.generation
+	if s.state.Index < 0 || s.state.Index >= len(s.state.Queue) {
+		s.mu.Unlock()
+		return
+	}
+	t := s.state.Queue[s.state.Index]
+	s.mu.Unlock()
+	if !needsCastMeta(t) {
+		return
+	}
+	n := s.enrichCastTrack(ctx, t)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.generation != g || s.state.Index < 0 || s.state.Index >= len(s.state.Queue) || s.state.Queue[s.state.Index].ID != n.ID {
+		return
+	}
+	cur := s.state.Queue[s.state.Index]
+	if n.Title == cur.Title && n.DurationMS == cur.DurationMS && n.ThumbnailURL == cur.ThumbnailURL && n.Artists == cur.Artists {
+		return
+	}
+	s.state.Queue[s.state.Index] = n
+	s.saveLocked()
 }
 
 func (s *Server) castPlay(tracks []Track, idx int, offset int64) {

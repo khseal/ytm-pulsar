@@ -126,6 +126,9 @@ type streamInfo struct {
 	initEnd, indexStart, indexEnd int64
 	// A live stream has no length; Pulsar plays its HLS manifest directly.
 	live bool
+	// Title and picture from the same player response that produced the URL.
+	title, author, thumbnail string
+	durationMS               int64
 }
 
 var videoID = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
@@ -532,6 +535,16 @@ func (c *Catalog) radio(ctx context.Context, id string) []Track {
 	}
 	return parseTracks(d)
 }
+func videoMeta(v *yt.Video) (title, author, thumbnail string, durationMS int64) {
+	if v == nil {
+		return "", "", "", 0
+	}
+	if v.Duration > 0 {
+		durationMS = v.Duration.Milliseconds()
+	}
+	return v.Title, v.Author, videoThumbnail(v), durationMS
+}
+
 func (c *Catalog) resolve(ctx context.Context, id string) (streamInfo, error) {
 	if !videoID.MatchString(id) {
 		return streamInfo{}, errors.New("неверный ID трека")
@@ -558,6 +571,7 @@ func (c *Catalog) resolve(ctx context.Context, id string) (streamInfo, error) {
 			log.Printf("live track=%s: master playlist kept: %s", id, logSafe(err.Error()))
 		}
 		s := streamInfo{url: link, mime: "application/x-mpegurl", until: time.Now().Add(30 * time.Minute), id: id, live: true}
+		s.title, s.author, s.thumbnail, s.durationMS = videoMeta(v)
 		c.streams[id] = s
 		return s, nil
 	}
@@ -589,6 +603,7 @@ func (c *Catalog) resolve(ctx context.Context, id string) (streamInfo, error) {
 			continue
 		}
 		s := streamInfo{url: link, mime: f.MimeType, length: f.ContentLength, until: time.Now().Add(time.Hour), id: id}
+		s.title, s.author, s.thumbnail, s.durationMS = videoMeta(v)
 		if f.InitRange != nil && f.IndexRange != nil {
 			s.initEnd, _ = strconv.ParseInt(f.InitRange.End, 10, 64)
 			s.indexStart, _ = strconv.ParseInt(f.IndexRange.Start, 10, 64)

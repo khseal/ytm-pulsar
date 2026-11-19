@@ -15,6 +15,9 @@ let discoveredAccounts=[];
 let accountKey="";
 let previousAuth=null;
 let settings=null;
+let volumeDrag=false;
+let volumeGen=0;
+let volumeSend;
 const titles = {queue:'Очередь',search:'Поиск',liked:'Мои лайки',playlists:'Плейлисты',settings:'Настройки'};
 const statusText = {playing:'Сейчас играет',paused:'На паузе',stopped:'Готова слушать',searching:'Ищем музыку…',buffering:'Подготовка трека…',error:'Не удалось включить трек'};
 const formatTime = (ms) => { const s=Math.max(0,Math.floor((ms||0)/1000)); return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; };
@@ -124,6 +127,12 @@ function renderState(next) {
   $('progress').max=Math.max(1,track?.duration_ms||1);$('progress').value=state.position_ms||0;
   $('seekbar').classList.toggle('disabled',!(track?.duration_ms>0));
   $('elapsed').textContent=formatTime(state.position_ms);$('duration').textContent=formatTime(track?.duration_ms);
+  const slider=$('volume');
+  if(!volumeDrag){
+    slider.disabled=!state.has_volume;
+    if(state.has_volume){slider.value=String(state.volume);$('volume-value').textContent=String(state.volume);}
+    else $('volume-value').textContent='—';
+  }
   $('queue-caption').textContent=track?`${state.queue.length} треков · выбран ${state.index+1}`:'Выбери музыку для начала';
   $('shuffle-queue').setAttribute('aria-pressed',String(!!state.shuffle));
   $('shuffle-queue').textContent=state.shuffle?'По порядку':'Перемешать';
@@ -204,6 +213,16 @@ $('seekbar').onclick=event=>{
   const position_ms=Math.round(Math.min(1,Math.max(0,(event.clientX-box.left)/box.width))*track.duration_ms);
   perform(null,()=>command('seek',{position_ms}));
 };
+$('volume').addEventListener('input',()=>{
+  const gen=++volumeGen;
+  volumeDrag=true;
+  $('volume-value').textContent=$('volume').value;
+  clearTimeout(volumeSend);
+  volumeSend=setTimeout(()=>{
+    const volume=Number($('volume').value);
+    command('volume',{volume}).finally(()=>{if(gen===volumeGen)volumeDrag=false;});
+  },150);
+});
 for(const action of ['previous','next','stop','toggle']) $(action).onclick=()=>perform($(action),()=>command(action));
 $('account-shortcut').onclick=()=>showView('settings');
 document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>showView(button.dataset.view));

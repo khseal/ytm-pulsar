@@ -47,22 +47,26 @@ func runDir() string     { return "/tmp/ytm-alice-run" }
 func socketPath() string { return filepath.Join(runDir(), "control.sock") }
 
 type State struct {
-	Version     string      `json:"version"`
-	Status      string      `json:"status"`
-	Queue       []Track     `json:"queue"`
-	Index       int         `json:"index"`
-	PositionMS  int64       `json:"position_ms"`
-	Error       string      `json:"error,omitempty"`
-	LoggedIn    bool        `json:"logged_in"`
-	Radio       bool        `json:"radio"`
-	Shuffle     bool        `json:"shuffle"`
-	Auth        *AuthStatus `json:"auth,omitempty"`
+	Version    string      `json:"version"`
+	Status     string      `json:"status"`
+	Queue      []Track     `json:"queue"`
+	Index      int         `json:"index"`
+	PositionMS int64       `json:"position_ms"`
+	Error      string      `json:"error,omitempty"`
+	LoggedIn   bool        `json:"logged_in"`
+	Radio      bool        `json:"radio"`
+	Shuffle    bool        `json:"shuffle"`
+	Volume     int         `json:"volume"`
+	HasVolume  bool        `json:"has_volume,omitempty"`
+	Muted      bool        `json:"muted,omitempty"`
+	Auth       *AuthStatus `json:"auth,omitempty"`
 }
 type request struct {
 	Action     string         `json:"action"`
 	Query      string         `json:"query,omitempty"`
 	Index      int            `json:"index,omitempty"`
 	PositionMS int64          `json:"position_ms,omitempty"`
+	Volume     int            `json:"volume,omitempty"`
 	Auth       *Credentials   `json:"auth,omitempty"`
 	Settings   *SettingsPatch `json:"settings,omitempty"`
 }
@@ -154,6 +158,7 @@ func (s *Server) snapshot() State {
 	if s.player != nil {
 		v.PositionMS = s.player.positionMS(v.PositionMS, time.Now())
 	}
+	v.Volume, v.Muted, v.HasVolume = shownVolume()
 	v.LoggedIn = s.catalog != nil && s.catalog.credentials() != nil
 	if s.catalog != nil {
 		status := s.catalog.authStatus()
@@ -202,6 +207,13 @@ func (s *Server) command(ctx context.Context, r request) response {
 		}
 		return s.command(ctx, request{Action: "play", Query: "https://music.youtube.com/playlist?list=" + r.Query})
 	case "status", "queue":
+		v := s.snapshot()
+		return response{State: &v}
+	case "volume":
+		if r.Volume < 0 || r.Volume > 100 {
+			return response{Error: "громкость от 0 до 100"}
+		}
+		requestVolume(r.Volume)
 		v := s.snapshot()
 		return response{State: &v}
 	case "search", "liked":
@@ -419,6 +431,13 @@ func (s *Server) startGuarded(offset int64, attempt int, expected *uint64) {
 		}
 		tokenBytes := make([]byte, 16)
 		rand.Read(tokenBytes)
+		if s.state.Index >= 0 && s.state.Index < len(s.state.Queue) && s.state.Queue[s.state.Index].ID == t.ID {
+			if n := applyStreamMeta(s.state.Queue[s.state.Index], src); n != s.state.Queue[s.state.Index] {
+				s.state.Queue[s.state.Index] = n
+				t = n
+				s.saveLocked()
+			}
+		}
 		s.startPulsarLocked(g, t.ID, hex.EncodeToString(tokenBytes), src, win, attempt)
 	}()
 }
@@ -578,6 +597,7 @@ func serve() error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+	go s.enrichCastQueue(ctx)
 	closeWeb, webErr := s.startWeb()
 	if webErr != nil {
 		log.Print("web panel unavailable: ", webErr)

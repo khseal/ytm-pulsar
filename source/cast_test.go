@@ -26,6 +26,43 @@ func TestParseCastMessages(t *testing.T) {
 	}
 }
 
+func TestCastPlaylistTargetUsesTheSendersVideo(t *testing.T) {
+	ids := []string{"aaaaaaaaaaa", "bbbbbbbbbbb"}
+	payload := map[string]any{"videoId": "zedy1eH0Klc", "currentIndex": "0", "videoIds": "aaaaaaaaaaa,bbbbbbbbbbb"}
+	if got := castPlaylistTarget("setPlaylist", payload, ids); got != "zedy1eH0Klc" {
+		t.Fatalf("setPlaylist played %s", got)
+	}
+	payload = map[string]any{"videoId": "bbbbbbbbbbb", "currentIndex": "0"}
+	if got := castPlaylistTarget("setPlaylist", payload, ids); got != "bbbbbbbbbbb" {
+		t.Fatalf("index won over videoId: %s", got)
+	}
+	payload = map[string]any{"currentIndex": "1"}
+	if got := castPlaylistTarget("setPlaylist", payload, ids); got != "bbbbbbbbbbb" {
+		t.Fatalf("currentIndex: %s", got)
+	}
+	payload = map[string]any{"videoIds": "aaaaaaaaaaa,bbbbbbbbbbb"}
+	if got := castPlaylistTarget("updatePlaylist", payload, ids); got != "" {
+		t.Fatalf("update without a selection changed the video to %s", got)
+	}
+	payload = map[string]any{"eventDetails": `{"eventType":"VIDEO_SELECTED","videoId":"bbbbbbbbbbb"}`}
+	if got := castPlaylistTarget("updatePlaylist", payload, ids); got != "bbbbbbbbbbb" {
+		t.Fatalf("selection: %s", got)
+	}
+}
+
+func TestApplyStreamMetaFillsAPlaceholder(t *testing.T) {
+	got := applyStreamMeta(Track{ID: "zedy1eH0Klc", Title: "zedy1eH0Klc", ThumbnailURL: fallbackThumbnail("zedy1eH0Klc")}, streamInfo{
+		title: "Название", author: "Автор", thumbnail: "https://i.ytimg.com/vi/zedy1eH0Klc/maxresdefault.jpg", durationMS: 125000,
+	})
+	if got.Title != "Название" || got.Artists != "Автор" || got.DurationMS != 125000 || !strings.Contains(got.ThumbnailURL, "maxresdefault") {
+		t.Fatalf("%+v", got)
+	}
+	kept := applyStreamMeta(Track{ID: "abcdefghijk", Title: "Уже есть", Artists: "Кто-то", DurationMS: 1000, ThumbnailURL: "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"}, streamInfo{title: "Другое", durationMS: 9})
+	if kept.Title != "Уже есть" || kept.DurationMS != 1000 {
+		t.Fatalf("overwrote a real track: %+v", kept)
+	}
+}
+
 func TestCastStatus(t *testing.T) {
 	q := []Track{{ID: "dQw4w9WgXcQ"}}
 	cases := map[string]int{"playing": 1, "paused": 2, "buffering": 3, "stopped": 4}

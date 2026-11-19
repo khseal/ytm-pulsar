@@ -25,3 +25,4 @@
 
 .voice-commands-editor{grid-column:1/-1}.voice-commands-editor .button-row{margin-top:20px}
 .seekbar{padding:9px 0;margin:-9px 0;cursor:pointer}.seekbar:hover progress{height:5px}.seekbar.disabled{cursor:default}
+.volume{display:flex;align-items:center;gap:10px;max-width:500px;margin-top:12px;color:#a19aa2}.volume .icon{width:18px;height:18px}.volume input[type=range]{flex:1;min-width:0;height:18px;margin:0;accent-color:#ff776c;cursor:pointer}.volume input:disabled{opacity:.4;cursor:default}#volume-value{width:2.6em;font-size:11px;font-variant-numeric:tabular-nums;text-align:right}

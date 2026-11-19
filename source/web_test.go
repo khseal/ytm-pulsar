@@ -51,6 +51,22 @@ func TestWebLocalAccessNeedsNoCodeAndAssetsStayBounded(t *testing.T) {
 		t.Fatal(out.Body.String())
 	}
 }
+func TestWebSetsVolume(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	p := panelFixture()
+	out := panelRequest(p, "POST", "/api/command", `{"action":"volume","volume":35}`, "http://alice.lan", false)
+	if out.Code != 200 || !strings.Contains(out.Body.String(), `"volume":35`) || !strings.Contains(out.Body.String(), `"has_volume":true`) {
+		t.Fatal(out.Code, out.Body.String())
+	}
+	out = panelRequest(p, "POST", "/api/command", `{"action":"volume","volume":0}`, "http://alice.lan", false)
+	if out.Code != 200 || !strings.Contains(out.Body.String(), `"volume":0`) {
+		t.Fatal(out.Code, out.Body.String())
+	}
+	out = panelRequest(p, "POST", "/api/command", `{"action":"volume","volume":140}`, "http://alice.lan", false)
+	if out.Code != 422 {
+		t.Fatal(out.Code, out.Body.String())
+	}
+}
 func TestWebRejectsForeignSitesAndArbitraryCommands(t *testing.T) {
 	t.Setenv("YTM_ALICE_DATA", t.TempDir())
 	p := panelFixture()
