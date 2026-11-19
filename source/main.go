@@ -274,6 +274,31 @@ func (s *Server) command(ctx context.Context, r request) response {
 		s.saveLocked()
 		s.mu.Unlock()
 		s.startGuarded(0, 0, &g)
+	case "surprise":
+		s.mu.Lock()
+		s.lookupGeneration++
+		lookup := s.lookupGeneration
+		g := s.generation
+		queue := append([]Track(nil), s.state.Queue...)
+		s.mu.Unlock()
+		tracks, e := s.catalog.surprise(ctx, queue)
+		s.mu.Lock()
+		if s.generation != g || s.lookupGeneration != lookup {
+			s.mu.Unlock()
+			return response{Error: "запрос заменён более новым"}
+		}
+		if e != nil {
+			s.mu.Unlock()
+			return response{Error: e.Error()}
+		}
+		added, start := s.appendSurpriseLocked(tracks)
+		s.mu.Unlock()
+		if added == 0 {
+			return response{Error: "все эти треки уже есть в очереди"}
+		}
+		if start {
+			s.startGuarded(0, 0, &g)
+		}
 	case "select", "jump":
 		s.mu.Lock()
 		i := r.Index - 1
@@ -295,7 +320,7 @@ func (s *Server) command(ctx context.Context, r request) response {
 		s.state.PositionMS = 0
 		s.mu.Unlock()
 		s.start(0)
-	case "next", "previous", "resume", "pause", "toggle", "stop", "seek":
+	case "next", "previous", "resume", "pause", "toggle", "stop", "seek", "clear":
 		s.mu.Lock()
 		s.lookupGeneration++
 		if r.Action == "toggle" {
@@ -331,6 +356,15 @@ func (s *Server) command(ctx context.Context, r request) response {
 			s.state.Status = "stopped"
 			s.state.PositionMS = 0
 			s.state.Error = ""
+		case "clear":
+			s.stopLocked()
+			s.state.Queue = []Track{}
+			s.state.Index = 0
+			s.state.PositionMS = 0
+			s.state.Status = "stopped"
+			s.state.Error = ""
+			s.queueOrder = nil
+			s.queueCast = false
 		case "seek":
 			if r.PositionMS < 0 || r.PositionMS > 7200000 {
 				s.mu.Unlock()
@@ -723,6 +757,8 @@ func help() {
   seek СЕКУНДЫ              перейти к позиции (ближайший аудиофрагмент)
   next | previous            следующий / предыдущий трек
   recommendations            персональные рекомендации (нужен вход)
+  surprise                   добавить случайные треки по популярным песням
+  clear                      остановить и очистить очередь
   shuffle-on | shuffle-off   перемешивание очереди
   config get                 постоянные настройки
   config set КЛЮЧ ЗНАЧЕНИЕ    изменить настройку; порт — после перезапуска

@@ -51,6 +51,26 @@ func TestWebLocalAccessNeedsNoCodeAndAssetsStayBounded(t *testing.T) {
 		t.Fatal(out.Body.String())
 	}
 }
+func TestWebHasSurpriseButton(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	out := panelRequest(panelFixture(), "GET", "/", "", "", false)
+	if out.Code != 200 || !strings.Contains(out.Body.String(), `id="surprise"`) || !strings.Contains(out.Body.String(), `id="clear-queue"`) {
+		t.Fatalf("%d %s", out.Code, out.Body.String())
+	}
+}
+func TestWebClearsQueue(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	p := panelFixture()
+	p.server.player = &nativePlayer{}
+	p.server.queueCast = true
+	out := panelRequest(p, "POST", "/api/command", `{"action":"clear"}`, "http://alice.lan", false)
+	if out.Code != 200 || !strings.Contains(out.Body.String(), `"status":"stopped"`) || (!strings.Contains(out.Body.String(), `"queue":[]`) && !strings.Contains(out.Body.String(), `"queue":null`)) {
+		t.Fatal(out.Code, out.Body.String())
+	}
+	if p.server.player != nil || p.server.queueCast || len(p.server.state.Queue) != 0 {
+		t.Fatal("queue was not cleared")
+	}
+}
 func TestWebSetsVolume(t *testing.T) {
 	t.Setenv("YTM_ALICE_DATA", t.TempDir())
 	p := panelFixture()

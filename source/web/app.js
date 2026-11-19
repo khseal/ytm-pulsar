@@ -134,6 +134,7 @@ function renderState(next) {
     else $('volume-value').textContent='—';
   }
   $('queue-caption').textContent=track?`${state.queue.length} треков · выбран ${state.index+1}`:'Выбери музыку для начала';
+  $('clear-queue').disabled=!state.queue?.length;
   $('shuffle-queue').setAttribute('aria-pressed',String(!!state.shuffle));
   $('shuffle-queue').textContent=state.shuffle?'По порядку':'Перемешать';
   $('sidebar-version').textContent=`ytm-pulsar ${state.version}`;
@@ -305,7 +306,20 @@ $('settings-form').addEventListener('submit',event=>{
  });
 });
 $('shuffle-queue').onclick=()=>perform($('shuffle-queue'),()=>command(state?.shuffle?'shuffle-off':'shuffle-on'));
+$('clear-queue').onclick=()=>perform($('clear-queue'),async()=>{
+ if(!state?.queue?.length) return;
+ if(!confirm('Очистить очередь и остановить музыку?')) return;
+ await command('clear');
+ notice('Очередь очищена.',true);
+});
 $('recommendations').onclick=()=>perform($('recommendations'),()=>command('recommendations'));
+function tracksWord(n){const a=n%10,b=n%100;if(a===1&&b!==11)return 'трек';if(a>=2&&a<=4&&(b<12||b>14))return 'трека';return 'треков';}
+$('surprise').onclick=()=>perform($('surprise'),async()=>{
+ const before=state?.queue?.length||0;
+ const result=await command('surprise');
+ const added=Math.max(0,(result.state?.queue?.length||0)-before);
+ if(added>0)notice(`В конец очереди добавлено ${added} ${tracksWord(added)}.`,true);
+});
 document.addEventListener('visibilitychange',()=>{clearTimeout(refreshTimer);if(!document.hidden)poll();else schedulePoll();});
 async function init(){
  try {
