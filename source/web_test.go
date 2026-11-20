@@ -58,6 +58,21 @@ func TestWebHasSurpriseButton(t *testing.T) {
 		t.Fatalf("%d %s", out.Code, out.Body.String())
 	}
 }
+func TestWebListsSurpriseGenres(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	out := panelRequest(panelFixture(), "POST", "/api/command", `{"action":"genres"}`, "http://alice.lan", false)
+	if out.Code != 200 || !strings.Contains(out.Body.String(), `"джаз"`) || !strings.Contains(out.Body.String(), `"city pop"`) {
+		t.Fatal(out.Code, out.Body.String())
+	}
+	out = panelRequest(panelFixture(), "POST", "/api/command", `{"action":"surprise","query":"не жанр"}`, "http://alice.lan", false)
+	if out.Code != 422 || !strings.Contains(out.Body.String(), "неизвестный жанр") {
+		t.Fatal(out.Code, out.Body.String())
+	}
+	page := panelRequest(panelFixture(), "GET", "/", "", "", false)
+	if !strings.Contains(page.Body.String(), `id="genre-menu"`) || !strings.Contains(page.Body.String(), `Все жанры`) || strings.Contains(page.Body.String(), `id="surprise-all"`) {
+		t.Fatal("genre menu missing")
+	}
+}
 func TestWebClearsQueue(t *testing.T) {
 	t.Setenv("YTM_ALICE_DATA", t.TempDir())
 	p := panelFixture()

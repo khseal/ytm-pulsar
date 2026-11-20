@@ -80,6 +80,7 @@ type response struct {
 	TVLogin   *TVLoginState    `json:"tv_login,omitempty"`
 	Settings  *Settings        `json:"settings,omitempty"`
 	WebAddr   string           `json:"web_addr,omitempty"`
+	Genres    []string         `json:"genres,omitempty"`
 }
 
 // nativePlayer is the current track on Pulsar's media player.
@@ -274,14 +275,20 @@ func (s *Server) command(ctx context.Context, r request) response {
 		s.saveLocked()
 		s.mu.Unlock()
 		s.startGuarded(0, 0, &g)
+	case "genres":
+		return response{Genres: append([]string(nil), surpriseGenres...)}
 	case "surprise":
+		genres, err := knownSurpriseGenres(r.Query)
+		if err != nil {
+			return response{Error: err.Error()}
+		}
 		s.mu.Lock()
 		s.lookupGeneration++
 		lookup := s.lookupGeneration
 		g := s.generation
 		queue := append([]Track(nil), s.state.Queue...)
 		s.mu.Unlock()
-		tracks, e := s.catalog.surprise(ctx, queue)
+		tracks, e := s.catalog.surprise(ctx, queue, genres)
 		s.mu.Lock()
 		if s.generation != g || s.lookupGeneration != lookup {
 			s.mu.Unlock()
@@ -757,7 +764,8 @@ func help() {
   seek СЕКУНДЫ              перейти к позиции (ближайший аудиофрагмент)
   next | previous            следующий / предыдущий трек
   recommendations            персональные рекомендации (нужен вход)
-  surprise                   добавить случайные треки из разных жанров
+  surprise                   случайные треки выбранных жанров
+  surprise жанр,жанр         один или несколько жанров; пусто — все
   clear                      остановить и очистить очередь
   shuffle-on | shuffle-off   перемешивание очереди
   config get                 постоянные настройки

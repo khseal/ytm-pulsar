@@ -314,12 +314,53 @@ $('clear-queue').onclick=()=>perform($('clear-queue'),async()=>{
 });
 $('recommendations').onclick=()=>perform($('recommendations'),()=>command('recommendations'));
 function tracksWord(n){const a=n%10,b=n%100;if(a===1&&b!==11)return 'трек';if(a>=2&&a<=4&&(b<12||b>14))return 'трека';return 'треков';}
-$('surprise').onclick=()=>perform($('surprise'),async()=>{
+function genreLabel(genre){return genre.slice(0,1).toUpperCase()+genre.slice(1);}
+function genresWord(n){const a=n%10,b=n%100;if(a===1&&b!==11)return 'жанр';if(a>=2&&a<=4&&(b<12||b>14))return 'жанра';return 'жанров';}
+function selectedGenres(){return [...document.querySelectorAll('#genre-menu input:checked')].map(input=>input.value).filter(Boolean);}
+function updateGenreLabel(){
+ const genres=selectedGenres();
+ $('genre-toggle').textContent=!genres.length?'Все жанры':genres.length<=2?genres.map(genreLabel).join(', '):`${genres.length} ${genresWord(genres.length)}`;
+}
+function onGenreChange(event){
+ const input=event.target;
+ const all=document.querySelector('#genre-menu input[value=""]');
+ const specifics=[...document.querySelectorAll('#genre-menu input')].filter(item=>item.value);
+ if(input.value===''){if(input.checked)specifics.forEach(item=>{item.checked=false;});else input.checked=true;}
+ else if(input.checked){
+  if(specifics.filter(item=>item.checked).length>6){input.checked=false;notice('Можно выбрать не больше 6 жанров.');}
+  else all.checked=false;
+ }else if(!specifics.some(item=>item.checked))all.checked=true;
+ updateGenreLabel();
+}
+$('genre-toggle').onclick=event=>{
+ event.stopPropagation();
+ const menu=$('genre-menu');
+ menu.hidden=!menu.hidden;
+ $('genre-toggle').setAttribute('aria-expanded',String(!menu.hidden));
+};
+$('genre-menu').onclick=event=>event.stopPropagation();
+$('genre-menu').addEventListener('change',onGenreChange);
+document.addEventListener('click',()=>{$('genre-menu').hidden=true;$('genre-toggle').setAttribute('aria-expanded','false');});
+async function addSurprise(genres){
  const before=state?.queue?.length||0;
- const result=await command('surprise');
+ const result=await command('surprise',genres.length?{query:genres.join(',')}:{});
  const added=Math.max(0,(result.state?.queue?.length||0)-before);
  if(added>0)notice(`В конец очереди добавлено ${added} ${tracksWord(added)}.`,true);
-});
+}
+$('surprise').onclick=()=>perform($('surprise'),()=>addSurprise(selectedGenres()));
+async function loadGenres(){
+ const result=await command('genres');
+ const menu=$('genre-menu');
+ for(const genre of result.genres||[]){
+  const label=document.createElement('label');
+  label.className='genre-option';
+  const input=document.createElement('input');
+  input.type='checkbox';
+  input.value=genre;
+  label.append(input,document.createTextNode(' '+genreLabel(genre)));
+  menu.append(label);
+ }
+}
 document.addEventListener('visibilitychange',()=>{clearTimeout(refreshTimer);if(!document.hidden)poll();else schedulePoll();});
 async function init(){
  try {
@@ -327,6 +368,7 @@ async function init(){
   if(titles[location.hash.slice(1)])showView(location.hash.slice(1));
  }catch(error){connected(false);notice(error.message||'Не удалось подключиться к колонке.');schedulePoll();return;}
  if(state?.logged_in)await perform(null,()=>command('auth-check'));else renderAuth({configured:false});
+ try{await loadGenres();}catch{}
  schedulePoll();
 }
 init();

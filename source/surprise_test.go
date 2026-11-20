@@ -8,7 +8,7 @@ import (
 )
 
 func TestSurpriseQueriesMixGenres(t *testing.T) {
-	got := surpriseQueries(4, rand.New(rand.NewPCG(1, 2)))
+	got := surpriseQueries(4, nil, rand.New(rand.NewPCG(1, 2)))
 	if len(got) != 4 {
 		t.Fatalf("%v", got)
 	}
@@ -26,9 +26,47 @@ func TestSurpriseQueriesMixGenres(t *testing.T) {
 		}
 		seen[query] = true
 	}
-	again := surpriseQueries(4, rand.New(rand.NewPCG(1, 2)))
+	again := surpriseQueries(4, nil, rand.New(rand.NewPCG(1, 2)))
 	if strings.Join(got, "|") != strings.Join(again, "|") {
 		t.Fatalf("seed changed the queries: %v vs %v", got, again)
+	}
+}
+
+func TestSurpriseQueriesStayInOneGenre(t *testing.T) {
+	got := surpriseQueries(4, []string{"джаз"}, rand.New(rand.NewPCG(3, 4)))
+	if len(got) != 4 {
+		t.Fatalf("%v", got)
+	}
+	seen := map[string]bool{}
+	for _, query := range got {
+		if query != "джаз" && !strings.HasPrefix(query, "джаз ") || seen[query] {
+			t.Fatalf("query %q", query)
+		}
+		seen[query] = true
+	}
+}
+
+func TestSurpriseQueriesCoverEveryChosenGenre(t *testing.T) {
+	got := surpriseQueries(4, []string{"джаз", "рок"}, rand.New(rand.NewPCG(5, 6)))
+	found := map[string]bool{}
+	for _, query := range got {
+		switch {
+		case query == "джаз" || strings.HasPrefix(query, "джаз "):
+			found["джаз"] = true
+		case query == "рок" || strings.HasPrefix(query, "рок "):
+			found["рок"] = true
+		default:
+			t.Fatalf("query %q", query)
+		}
+	}
+	if !found["джаз"] || !found["рок"] {
+		t.Fatalf("%v", got)
+	}
+	if _, err := knownSurpriseGenres("джаз, рок"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := knownSurpriseGenres("французские песни"); err == nil {
+		t.Fatal("language list still accepted")
 	}
 }
 

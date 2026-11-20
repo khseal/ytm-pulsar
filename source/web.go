@@ -230,6 +230,7 @@ func (p *webPanel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	allowed["seek"] = true
 	allowed["volume"] = true
 	allowed["surprise"] = true
+	allowed["genres"] = true
 	allowed["clear"] = true
 	if !allowed[command.Action] || len([]rune(command.Query)) > 500 {
 		webError(w, 400, "команда панели не поддерживается")

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"math/rand/v2"
 	"regexp"
+	"strings"
 )
 
 const (
-	surpriseLimit    = 15
-	surpriseSearches = 4
+	surpriseLimit       = 15
+	surpriseSearches    = 4
+	surpriseMaxSearches = 6
 )
 
 // Broad genres, not the current chart. A random mood or year is added so two
@@ -22,9 +24,7 @@ var surpriseGenres = []string{
 	"хип-хоп", "регги", "ска", "латина", "фламенко", "кантри",
 	"классика", "фортепиано", "гитара", "саксофон",
 	"city pop", "lo-fi", "synthwave", "k-pop", "j-pop",
-	"французские песни", "итальянские песни", "грузинские песни",
-	"армянские песни", "японские песни", "бразильские песни",
-	"турецкие песни", "немецкие песни", "скандинавский фолк",
+	"скандинавский фолк",
 }
 
 var surpriseModifiers = []string{
@@ -33,20 +33,71 @@ var surpriseModifiers = []string{
 	"окно", "поезд", "1978", "1986", "1994", "2003", "акустика",
 }
 
-func surpriseQueries(n int, rng *rand.Rand) []string {
-	if n > len(surpriseGenres) {
-		n = len(surpriseGenres)
+func knownSurpriseGenre(query string) (string, bool) {
+	query = strings.TrimSpace(query)
+	for _, genre := range surpriseGenres {
+		if strings.EqualFold(genre, query) {
+			return genre, true
+		}
 	}
+	return "", false
+}
+
+// knownSurpriseGenres accepts a comma-separated list. An empty query means
+// every genre.
+func knownSurpriseGenres(query string) ([]string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	var genres []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(query, ",") {
+		genre, ok := knownSurpriseGenre(part)
+		if !ok || seen[genre] {
+			return nil, errors.New("неизвестный жанр")
+		}
+		seen[genre] = true
+		genres = append(genres, genre)
+	}
+	if len(genres) > surpriseMaxSearches {
+		return nil, errors.New("можно выбрать не больше 6 жанров")
+	}
+	return genres, nil
+}
+
+func surpriseQueries(n int, genres []string, rng *rand.Rand) []string {
 	if n <= 0 {
 		return nil
 	}
-	order := rng.Perm(len(surpriseGenres))
-	out := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		query := surpriseGenres[order[i]]
-		if mod := surpriseModifiers[rng.IntN(len(surpriseModifiers))]; mod != "" {
+	mods := append([]string(nil), surpriseModifiers...)
+	rng.Shuffle(len(mods), func(i, j int) { mods[i], mods[j] = mods[j], mods[i] })
+	chosen := append([]string(nil), genres...)
+	if len(chosen) == 0 {
+		order := rng.Perm(len(surpriseGenres))
+		if n > len(surpriseGenres) {
+			n = len(surpriseGenres)
+		}
+		chosen = make([]string, n)
+		for i := 0; i < n; i++ {
+			chosen[i] = surpriseGenres[order[i]]
+		}
+	}
+	searches := n
+	if len(genres) > searches {
+		searches = len(genres)
+	}
+	out := make([]string, 0, searches)
+	seen := map[string]bool{}
+	for i := 0; i < searches; i++ {
+		query := chosen[i%len(chosen)]
+		if mod := mods[i%len(mods)]; mod != "" {
 			query += " " + mod
 		}
+		if seen[query] {
+			query = chosen[i%len(chosen)]
+		}
+		seen[query] = true
 		out = append(out, query)
 	}
 	return out
@@ -54,11 +105,11 @@ func surpriseQueries(n int, rng *rand.Rand) []string {
 
 // surprise adds songs from several random genre searches. The top few hits of
 // each search are skipped, remixes stay out, and the current queue is kept.
-func (c *Catalog) surprise(ctx context.Context, queue []Track) ([]Track, error) {
+func (c *Catalog) surprise(ctx context.Context, queue []Track, genres []string) ([]Track, error) {
 	rng := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	var pool []Track
 	var last error
-	for _, query := range surpriseQueries(surpriseSearches, rng) {
+	for _, query := range surpriseQueries(surpriseSearches, genres, rng) {
 		if ctx.Err() != nil {
 			break
 		}
