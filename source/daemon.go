@@ -22,6 +22,22 @@ func packageRoot() string {
 	return "/data/yam"
 }
 
+// bootScript starts the service after the station boots. env.sh supplies
+// YTM_ALICE_DATA; without it the queue and account would be read from a
+// different directory than the one used by hand.
+func bootScript(root string) string {
+	return "#!/bin/sh\n# " + bootMarker + "\n" +
+		"export YAM_ROOT='" + root + "'\n" +
+		"[ -f \"$YAM_ROOT/env.sh\" ] && . \"$YAM_ROOT/env.sh\"\n" +
+		"export YAM_ROOT YTM_PLAYER=\"${YTM_PLAYER:-pulsar}\"\n" +
+		"export YTM_ALICE_DATA=\"${YTM_ALICE_DATA:-$YAM_ROOT/var}\"\n" +
+		"export YAM_VAR=\"${YAM_VAR:-$YTM_ALICE_DATA}\"\n" +
+		"case \"${1:-}\" in\n" +
+		" start) [ -x \"$YAM_ROOT/bin/ytm-alice\" ] && \"$YAM_ROOT/bin/ytm-alice\" daemon start ;;\n" +
+		" stop) [ -x \"$YAM_ROOT/bin/ytm-alice\" ] && \"$YAM_ROOT/bin/ytm-alice\" daemon stop ;;\n" +
+		"esac\nexit 0\n"
+}
+
 func daemon(action string) error {
 	switch action {
 	case "start":
@@ -128,8 +144,7 @@ func daemon(action string) error {
 			} else if dest, e := os.Readlink("/usr/bin/ytm-alice"); e != nil || dest != link {
 				return errors.New("/usr/bin/ytm-alice принадлежит другой программе")
 			}
-			script := "#!/bin/sh\n# " + bootMarker + "\nexport YAM_ROOT='" + root + "'\nexport YAM_VAR=\"$YAM_ROOT/var\"\ncase \"${1:-}\" in\n start) [ -x \"$YAM_ROOT/bin/ytm-alice\" ] && \"$YAM_ROOT/bin/ytm-alice\" daemon start ;;\n stop) [ -x \"$YAM_ROOT/bin/ytm-alice\" ] && \"$YAM_ROOT/bin/ytm-alice\" daemon stop ;;\nesac\nexit 0\n"
-			return os.WriteFile(bootPath, []byte(script), 0755)
+			return os.WriteFile(bootPath, []byte(bootScript(root)), 0755)
 		}()
 		exec.Command("sync").Run()
 		restoreErr := exec.Command("mount", "-o", "remount,ro", "/").Run()
