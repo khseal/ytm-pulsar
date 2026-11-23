@@ -1,0 +1,12 @@
+{
+  "domain": "ytm_pulsar",
+  "name": "YouTube Music",
+  "codeowners": ["@khseal"],
+  "config_flow": true,
+  "documentation": "https://github.com/khseal/ytm-pulsar",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/khseal/ytm-pulsar/issues",
+  "requirements": [],
+  "version": "0.1.2"
+}

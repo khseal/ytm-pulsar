@@ -1,0 +1,16 @@
+search:
+  target:
+    entity:
+      integration: ytm_pulsar
+      domain: media_player
+  fields:
+    query:
+      required: true
+      example: "Кино Группа крови"
+      selector:
+        text:
+random:
+  target:
+    entity:
+      integration: ytm_pulsar
+      domain: media_player

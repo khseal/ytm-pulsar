@@ -1,0 +1,13 @@
+{
+  "entity": {
+    "media_player": {
+      "": {
+        "default": "mdi:youtube"
+      }
+    }
+  },
+  "services": {
+    "search": "mdi:youtube",
+    "random": "mdi:shuffle-variant"
+  }
+}

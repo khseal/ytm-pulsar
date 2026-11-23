@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "YouTube Music",
+        "description": "Address of the ytm-pulsar panel on the speaker. The usual port is 24721.\n\nAfter the wake word:\n• turn on youtube — resume the queue\n• youtube forward / youtube back\n• find on youtube …\n• youtube delete everything\n• random on youtube",
+        "data": {
+          "host": "Speaker address",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "The speaker did not answer. Check the address and that YouTube Music is running."
+    },
+    "abort": {
+      "already_configured": "This speaker is already added."
+    }
+  },
+  "services": {
+    "search": {
+      "name": "Search YouTube",
+      "description": "Find the query on YouTube Music and play it.",
+      "fields": {
+        "query": {
+          "name": "Query",
+          "description": "Artist, song, album or playlist."
+        }
+      }
+    },
+    "random": {
+      "name": "Play random",
+      "description": "Clear the queue and play random YouTube songs."
+    }
+  }
+}
