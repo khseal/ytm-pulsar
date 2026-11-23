@@ -648,7 +648,9 @@ func serve() error {
 	httpServer := &http.Server{Addr: relayAddr, Handler: http.HandlerFunc(s.relay), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpServer.ListenAndServe() }()
-	// Pulsar owns the LEDs, the mixer and Bluetooth; Alice is not running.
+	// Pulsar owns the LEDs and the mixer. A long press of its action button
+	// only makes this adapter discoverable; volume and mic mute stay Pulsar's.
+	go watchBluetoothButton(ctx)
 	pulsarDone := make(chan struct{})
 	s.pulsar = &pulsarClient{onState: s.onPulsarState}
 	pulsarAPI.Store(s.pulsar)
