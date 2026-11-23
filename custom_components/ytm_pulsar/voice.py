@@ -41,12 +41,31 @@ def _speech(intent_obj: Intent, text: str) -> IntentResponse:
     return response
 
 
-def _query(intent_obj: Intent) -> str:
-    slot = intent_obj.slots.get("ytm_query")
+def _slot(intent_obj: Intent, name: str) -> str:
+    slot = intent_obj.slots.get(name)
     if slot is None:
         return ""
     value = slot.get("value") if isinstance(slot, dict) else getattr(slot, "value", "")
     return str(value or "").strip()
+
+
+def _query(intent_obj: Intent) -> str:
+    return _slot(intent_obj, "query") or _slot(intent_obj, "ytm_query")
+
+
+def _search_schema():
+    """Parameter for the language model. Exact phrases still use ytm_query."""
+    try:
+        import probatio
+
+        required = probatio.Required
+    except ImportError:
+        import voluptuous as vol
+
+        required = vol.Required
+    from homeassistant.helpers import config_validation as cv
+
+    return {required("query"): cv.string}
 
 
 class _PlayerIntent(IntentHandler):
@@ -61,7 +80,11 @@ class _PlayerIntent(IntentHandler):
 
 class PlayIntent(_PlayerIntent):
     intent_type = INTENT_PLAY
-    description = "Включить музыку с YouTube"
+    description = (
+        "Включить ютуб и продолжить очередь, которая уже была. "
+        "Если очередь пустая, включить подборку. "
+        "Вызывай, когда просят включить, запустить или продолжить музыку ютуба."
+    )
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         entity, missing = await self._player(intent_obj)
@@ -72,7 +95,11 @@ class PlayIntent(_PlayerIntent):
 
 class NextIntent(_PlayerIntent):
     intent_type = INTENT_NEXT
-    description = "Следующий трек YouTube"
+    description = (
+        "Следующий трек очереди ютуба. "
+        "Вызывай и на неточные фразы: дальше, следующий, ещё песню, переключи, "
+        "если речь о ютубе."
+    )
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         entity, missing = await self._player(intent_obj)
@@ -83,7 +110,11 @@ class NextIntent(_PlayerIntent):
 
 class PreviousIntent(_PlayerIntent):
     intent_type = INTENT_PREVIOUS
-    description = "Предыдущий трек YouTube"
+    description = (
+        "Предыдущий трек очереди ютуба. "
+        "Вызывай и на неточные фразы: назад, верни, прошлый, предыдущий, "
+        "если речь о ютубе."
+    )
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         entity, missing = await self._player(intent_obj)
@@ -94,7 +125,11 @@ class PreviousIntent(_PlayerIntent):
 
 class SearchIntent(_PlayerIntent):
     intent_type = INTENT_SEARCH
-    description = "Найти на YouTube и включить"
+    description = (
+        "Найти на ютубе и сразу включить. "
+        "query — исполнитель, песня, альбом или плейлист."
+    )
+    slot_schema = _search_schema()
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         entity, missing = await self._player(intent_obj)
@@ -105,7 +140,10 @@ class SearchIntent(_PlayerIntent):
 
 class ClearIntent(_PlayerIntent):
     intent_type = INTENT_CLEAR
-    description = "Очистить очередь YouTube"
+    description = (
+        "Только очистить очередь ютуба и ничего не включать. "
+        "Вызывай, когда просят удалить, очистить или сбросить список ютуба."
+    )
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         entity, missing = await self._player(intent_obj)
@@ -116,7 +154,10 @@ class ClearIntent(_PlayerIntent):
 
 class RandomIntent(_PlayerIntent):
     intent_type = INTENT_RANDOM
-    description = "Очистить очередь и включить случайные треки YouTube"
+    description = (
+        "Очистить очередь ютуба и включить случайные треки. "
+        "Вызывай, когда просят случайное, рандом или что-нибудь на ютубе."
+    )
 
     async def async_handle(self, intent_obj: Intent) -> IntentResponse:
         entity, missing = await self._player(intent_obj)
