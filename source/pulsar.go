@@ -227,9 +227,9 @@ func (s *Server) startPulsarLocked(g uint64, trackID, token string, src streamIn
 }
 
 // onPulsarState follows the media player of the current track. Idle counts
-// as the end of the track only after Pulsar played it and the relay served
-// its last byte: a Stop, a Home Assistant command or a failed stream also end
-// in Idle.
+// as the end of the track only when playback itself reached the end. The
+// relay hands the file to Pulsar faster than it plays, and Music Assistant
+// or Home Assistant can stop the speaker after that; both also end in Idle.
 //
 // Pulsar answers every command with its state as it is at that moment, so
 // the previous track's Playing and Idle can arrive after the next track was
@@ -269,7 +269,7 @@ func (s *Server) onPulsarState(st int) {
 		}
 		s.state.PositionMS = p.positionMS(s.state.PositionMS, now)
 		s.player = nil
-		if p.reachedEnd.Load() {
+		if p.reachedEnd.Load() && playbackEnded(s.state.PositionMS, trackDurationMS(s.state)) {
 			s.state.Status = "buffering"
 			id := s.state.Queue[s.state.Index].ID
 			s.mu.Unlock()
@@ -281,6 +281,25 @@ func (s *Server) onPulsarState(st int) {
 		s.saveLocked()
 	}
 	s.mu.Unlock()
+}
+
+func trackDurationMS(st State) int64 {
+	if st.Index < 0 || st.Index >= len(st.Queue) {
+		return 0
+	}
+	return st.Queue[st.Index].DurationMS
+}
+
+// playbackEnded reports that the speaker reached the song, rather than being
+// stopped from outside. The played position has to land on the duration:
+// earlier is a stop, and far past it means the clock kept running while
+// another source had the speaker.
+func playbackEnded(position, duration int64) bool {
+	if duration <= 0 {
+		return true
+	}
+	const slop = int64(12000)
+	return position+slop >= duration && position <= duration+slop
 }
 
 func dialPulsar() (net.Conn, *noisePair, error) {

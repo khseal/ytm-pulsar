@@ -141,6 +141,67 @@ func TestSeekPositionDoesNotJumpBackAfterPassingOffset(t *testing.T) {
 	}
 }
 
+func TestMusicAssistantStopDoesNotStartYouTube(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	p := &nativePlayer{}
+	p.fetched.Store(true)
+	p.reachedEnd.Store(true)
+	p.sawPlaying = true
+	s := &Server{player: p, state: State{
+		Status:     "playing",
+		Index:      0,
+		PositionMS: 30000,
+		Queue: []Track{
+			{ID: "abcdefghijk", DurationMS: 240000},
+			{ID: "bbcdefghijk", DurationMS: 180000},
+		},
+	}}
+	s.onPulsarState(mediaStateIdle)
+	if s.player != nil || s.state.Index != 0 || s.state.Status != "stopped" || s.state.PositionMS != 30000 {
+		t.Fatal("stop started the next track", s.snapshot())
+	}
+}
+
+func TestIdlePastDurationDoesNotStartYouTube(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	p := &nativePlayer{}
+	p.fetched.Store(true)
+	p.reachedEnd.Store(true)
+	p.sawPlaying = true
+	s := &Server{player: p, state: State{
+		Status:     "playing",
+		Index:      0,
+		PositionMS: 600000,
+		Queue: []Track{
+			{ID: "abcdefghijk", DurationMS: 240000},
+			{ID: "bbcdefghijk", DurationMS: 180000},
+		},
+	}}
+	s.onPulsarState(mediaStateIdle)
+	if s.player != nil || s.state.Index != 0 || s.state.Status != "stopped" {
+		t.Fatal("another source running long started YouTube", s.snapshot())
+	}
+}
+
+func TestIdleAtEndOfTrackFinishesIt(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	p := &nativePlayer{}
+	p.fetched.Store(true)
+	p.reachedEnd.Store(true)
+	p.sawPlaying = true
+	off := false
+	s := &Server{player: p, settings: &Settings{WebAddr: ":24721", Radio: off}, state: State{
+		Status:     "playing",
+		Index:      0,
+		PositionMS: 236000,
+		Queue:      []Track{{ID: "abcdefghijk", DurationMS: 240000}},
+	}}
+	s.onPulsarState(mediaStateIdle)
+	if s.player != nil || s.state.Status != "stopped" || s.state.PositionMS != 0 || s.state.Error != "" {
+		t.Fatal("end of the track was treated as a stop", s.snapshot())
+	}
+}
+
 func TestPulsarIgnoresPreviousTrackStates(t *testing.T) {
 	t.Setenv("YTM_ALICE_DATA", t.TempDir())
 	p := &nativePlayer{}
