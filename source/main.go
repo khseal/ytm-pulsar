@@ -47,19 +47,21 @@ func runDir() string     { return "/tmp/ytm-alice-run" }
 func socketPath() string { return filepath.Join(runDir(), "control.sock") }
 
 type State struct {
-	Version    string      `json:"version"`
-	Status     string      `json:"status"`
-	Queue      []Track     `json:"queue"`
-	Index      int         `json:"index"`
-	PositionMS int64       `json:"position_ms"`
-	Error      string      `json:"error,omitempty"`
-	LoggedIn   bool        `json:"logged_in"`
-	Radio      bool        `json:"radio"`
-	Shuffle    bool        `json:"shuffle"`
-	Volume     int         `json:"volume"`
-	HasVolume  bool        `json:"has_volume,omitempty"`
-	Muted      bool        `json:"muted,omitempty"`
-	Auth       *AuthStatus `json:"auth,omitempty"`
+	Version      string      `json:"version"`
+	Status       string      `json:"status"`
+	Queue        []Track     `json:"queue"`
+	Index        int         `json:"index"`
+	PositionMS   int64       `json:"position_ms"`
+	Error        string      `json:"error,omitempty"`
+	LoggedIn     bool        `json:"logged_in"`
+	Radio        bool        `json:"radio"`
+	Shuffle      bool        `json:"shuffle"`
+	Volume       int         `json:"volume"`
+	HasVolume    bool        `json:"has_volume,omitempty"`
+	Muted        bool        `json:"muted,omitempty"`
+	SpeakerOn    bool        `json:"speaker_on"`
+	SpeakerKnown bool        `json:"speaker_known,omitempty"`
+	Auth         *AuthStatus `json:"auth,omitempty"`
 }
 type request struct {
 	Action     string         `json:"action"`
@@ -160,6 +162,7 @@ func (s *Server) snapshot() State {
 		v.PositionMS = s.player.positionMS(v.PositionMS, time.Now())
 	}
 	v.Volume, v.Muted, v.HasVolume = shownVolume()
+	v.SpeakerOn, v.SpeakerKnown = readSpeaker()
 	v.LoggedIn = s.catalog != nil && s.catalog.credentials() != nil
 	if s.catalog != nil {
 		status := s.catalog.authStatus()
@@ -215,6 +218,12 @@ func (s *Server) command(ctx context.Context, r request) response {
 			return response{Error: "громкость от 0 до 100"}
 		}
 		requestVolume(r.Volume)
+		v := s.snapshot()
+		return response{State: &v}
+	case "speaker-on", "speaker-off":
+		if err := setSpeaker(r.Action == "speaker-on"); err != nil {
+			return response{Error: err.Error()}
+		}
 		v := s.snapshot()
 		return response{State: &v}
 	case "search", "liked":
@@ -327,7 +336,7 @@ func (s *Server) command(ctx context.Context, r request) response {
 		s.state.PositionMS = 0
 		s.mu.Unlock()
 		s.start(0)
-	case "next", "previous", "resume", "pause", "toggle", "stop", "seek", "clear":
+	case "next", "previous", "resume", "pause", "toggle", "stop", "seek", "seek-by", "clear":
 		s.mu.Lock()
 		s.lookupGeneration++
 		if r.Action == "toggle" {
@@ -372,6 +381,28 @@ func (s *Server) command(ctx context.Context, r request) response {
 			s.state.Error = ""
 			s.queueOrder = nil
 			s.queueCast = false
+		case "seek-by":
+			if len(s.state.Queue) == 0 {
+				s.mu.Unlock()
+				return response{Error: "плеер не запущен"}
+			}
+			pos := s.state.PositionMS
+			if s.player != nil {
+				pos = s.player.positionMS(pos, time.Now())
+			}
+			var dur int64
+			if i := s.state.Index; i >= 0 && i < len(s.state.Queue) {
+				dur = s.state.Queue[i].DurationMS
+			}
+			pos = seekTarget(pos, r.PositionMS, dur)
+			if pos > 0 && s.player != nil && !s.player.source.hasSeekIndex() {
+				s.mu.Unlock()
+				return response{Error: "этот аудиопоток не поддерживает перемотку"}
+			}
+			s.mu.Unlock()
+			s.start(pos)
+			v := s.snapshot()
+			return response{State: &v}
 		case "seek":
 			if r.PositionMS < 0 || r.PositionMS > 7200000 {
 				s.mu.Unlock()

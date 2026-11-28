@@ -14,11 +14,15 @@ from homeassistant.helpers.intent import (
 
 from .const import (
     INTENT_CLEAR,
+    INTENT_FORWARD,
     INTENT_NEXT,
     INTENT_PLAY,
     INTENT_PREVIOUS,
     INTENT_RANDOM,
+    INTENT_REWIND,
     INTENT_SEARCH,
+    INTENT_SPEAKER_OFF,
+    INTENT_SPEAKER_ON,
     INTENTS,
 )
 
@@ -152,6 +156,34 @@ class ClearIntent(_PlayerIntent):
         return _speech(intent_obj, await entity.async_voice_clear())
 
 
+class ForwardIntent(_PlayerIntent):
+    intent_type = INTENT_FORWARD
+    description = (
+        "Перемотать ютуб на 15 секунд вперёд внутри текущего трека, не переключая песню. "
+        "Вызывай на «промотай», «перемотай вперёд на пятнадцать», если речь о ютубе."
+    )
+
+    async def async_handle(self, intent_obj: Intent) -> IntentResponse:
+        entity, missing = await self._player(intent_obj)
+        if missing:
+            return missing
+        return _speech(intent_obj, await entity.async_voice_seek(15000))
+
+
+class RewindIntent(_PlayerIntent):
+    intent_type = INTENT_REWIND
+    description = (
+        "Перемотать ютуб на 15 секунд назад внутри текущего трека, не включая предыдущую песню. "
+        "Вызывай на «отмотай», «верни на пятнадцать секунд», если речь о ютубе."
+    )
+
+    async def async_handle(self, intent_obj: Intent) -> IntentResponse:
+        entity, missing = await self._player(intent_obj)
+        if missing:
+            return missing
+        return _speech(intent_obj, await entity.async_voice_seek(-15000))
+
+
 class RandomIntent(_PlayerIntent):
     intent_type = INTENT_RANDOM
     description = (
@@ -166,4 +198,46 @@ class RandomIntent(_PlayerIntent):
         return _speech(intent_obj, await entity.async_voice_random())
 
 
-HANDLERS = (PlayIntent, NextIntent, PreviousIntent, SearchIntent, ClearIntent, RandomIntent)
+class SpeakerOnIntent(_PlayerIntent):
+    intent_type = INTENT_SPEAKER_ON
+    description = (
+        "Включить встроенный динамик колонки, оба канала усилителя. "
+        "Работает только на Яндекс Станции Лайт 2. "
+        "Это не пауза и не громкость ютуба: звук снова идёт из колонки."
+    )
+
+    async def async_handle(self, intent_obj: Intent) -> IntentResponse:
+        entity, missing = await self._player(intent_obj)
+        if missing:
+            return missing
+        return _speech(intent_obj, await entity.async_voice_speaker(True))
+
+
+class SpeakerOffIntent(_PlayerIntent):
+    intent_type = INTENT_SPEAKER_OFF
+    description = (
+        "Выключить встроенный динамик колонки, оба канала усилителя. "
+        "Работает только на Яндекс Станции Лайт 2. "
+        "Музыка и ответы замолкают, очередь ютуба не останавливается. "
+        "Это не пауза и не «тише»."
+    )
+
+    async def async_handle(self, intent_obj: Intent) -> IntentResponse:
+        entity, missing = await self._player(intent_obj)
+        if missing:
+            return missing
+        return _speech(intent_obj, await entity.async_voice_speaker(False))
+
+
+HANDLERS = (
+    PlayIntent,
+    NextIntent,
+    PreviousIntent,
+    SearchIntent,
+    ClearIntent,
+    RandomIntent,
+    ForwardIntent,
+    RewindIntent,
+    SpeakerOnIntent,
+    SpeakerOffIntent,
+)

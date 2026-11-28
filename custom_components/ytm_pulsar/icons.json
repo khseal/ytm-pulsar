@@ -4,6 +4,11 @@
       "": {
         "default": "mdi:youtube"
       }
+    },
+    "switch": {
+      "": {
+        "default": "mdi:speaker"
+      }
     }
   },
   "services": {

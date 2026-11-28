@@ -41,6 +41,30 @@ intents:
           - "ютуб удали всё"
           - "ютуб удалить все"
           - "ютуб удалить всё"
+  YtmPulsarForward:
+    data:
+      - sentences:
+          - "ютуб промотай"
+          - "промотай ютуб"
+          - "промотай на ютубе"
+          - "ютуб промотай пятнадцать"
+  YtmPulsarRewind:
+    data:
+      - sentences:
+          - "ютуб отмотай"
+          - "отмотай ютуб"
+          - "отмотай на ютубе"
+          - "ютуб отмотай пятнадцать"
+  YtmPulsarSpeakerOn:
+    data:
+      - sentences:
+          - "включи динамик"
+          - "включи встроенный динамик"
+  YtmPulsarSpeakerOff:
+    data:
+      - sentences:
+          - "выключи динамик"
+          - "выключи встроенный динамик"
   YtmPulsarRandom:
     data:
       - sentences:

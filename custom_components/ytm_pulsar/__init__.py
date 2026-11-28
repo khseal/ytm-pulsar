@@ -15,7 +15,7 @@ from .const import CONF_URL, DOMAIN, SENTENCE_FILE, SENTENCE_MARKER
 from .voice import register, unregister
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.MEDIA_PLAYER]
+PLATFORMS = [Platform.MEDIA_PLAYER, Platform.SWITCH]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

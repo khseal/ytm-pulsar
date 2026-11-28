@@ -14,6 +14,10 @@ INTENT_PREVIOUS = "YtmPulsarPrevious"
 INTENT_SEARCH = "YtmPulsarSearch"
 INTENT_CLEAR = "YtmPulsarClear"
 INTENT_RANDOM = "YtmPulsarRandom"
+INTENT_FORWARD = "YtmPulsarForward"
+INTENT_REWIND = "YtmPulsarRewind"
+INTENT_SPEAKER_ON = "YtmPulsarSpeakerOn"
+INTENT_SPEAKER_OFF = "YtmPulsarSpeakerOff"
 
 INTENTS = (
     INTENT_PLAY,
@@ -22,6 +26,10 @@ INTENTS = (
     INTENT_SEARCH,
     INTENT_CLEAR,
     INTENT_RANDOM,
+    INTENT_FORWARD,
+    INTENT_REWIND,
+    INTENT_SPEAKER_ON,
+    INTENT_SPEAKER_OFF,
 )
 
 SENTENCE_FILE = "ytm_pulsar.yaml"

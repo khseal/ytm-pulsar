@@ -213,6 +213,27 @@ func TestPulsarIgnoresPreviousTrackStates(t *testing.T) {
 	}
 }
 
+func TestSeekTargetStepsFifteenSeconds(t *testing.T) {
+	if got := seekTarget(30000, 15000, 240000); got != 45000 {
+		t.Fatal(got)
+	}
+	if got := seekTarget(5000, -15000, 240000); got != 0 {
+		t.Fatal(got)
+	}
+	if got := seekTarget(230000, 15000, 240000); got != 239000 {
+		t.Fatal(got)
+	}
+}
+
+func TestSeekByWithoutIndexKeepsCurrentPlayer(t *testing.T) {
+	p := &nativePlayer{}
+	s := &Server{player: p, state: State{Queue: []Track{{ID: "abcdefghijk", DurationMS: 180000}}, Status: "playing", PositionMS: 15000}}
+	r := s.command(context.Background(), request{Action: "seek-by", PositionMS: 15000})
+	if r.Error == "" || s.player != p || s.state.PositionMS != 15000 || s.state.Status != "playing" {
+		t.Fatal("unsupported relative seek interrupted current playback", r.Error)
+	}
+}
+
 func TestSeekWithoutIndexKeepsCurrentPlayer(t *testing.T) {
 	p := &nativePlayer{}
 	s := &Server{player: p, state: State{Queue: []Track{{ID: "abcdefghijk"}}, Status: "playing", PositionMS: 15000}}

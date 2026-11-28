@@ -123,7 +123,11 @@ function renderState(next) {
   setArtwork($('current-cover'),track?.thumbnail_url);
   const playing=['playing','buffering','searching'].includes(state.status);
   $('toggle').replaceChildren(icon(playing?'pause':'play'));$('toggle').setAttribute('aria-label',playing?'Пауза':'Продолжить');
-  $('toggle').disabled=!track;$('stop').disabled=!track;$('previous').disabled=!track||state.index===0;$('next').disabled=!track||state.index>=state.queue.length-1;
+  $('toggle').disabled=!track;$('stop').disabled=!track;$('rewind').disabled=!track;$('forward').disabled=!track;$('previous').disabled=!track||state.index===0;$('next').disabled=!track||state.index>=state.queue.length-1;
+  $('speaker').disabled=!state.speaker_known;
+  $('speaker').replaceChildren(icon(state.speaker_on?'volume':'speaker-off'));
+  $('speaker').setAttribute('aria-pressed',state.speaker_on?'true':'false');
+  $('speaker').setAttribute('aria-label',state.speaker_on?'Выключить динамик':'Включить динамик');
   $('progress').max=Math.max(1,track?.duration_ms||1);$('progress').value=state.position_ms||0;
   $('seekbar').classList.toggle('disabled',!(track?.duration_ms>0));
   $('elapsed').textContent=formatTime(state.position_ms);$('duration').textContent=formatTime(track?.duration_ms);
@@ -225,6 +229,8 @@ $('volume').addEventListener('input',()=>{
   },150);
 });
 for(const action of ['previous','next','stop','toggle']) $(action).onclick=()=>perform($(action),()=>command(action));
+for(const [id,delta] of [['rewind',-15000],['forward',15000]]) $(id).onclick=()=>perform($(id),()=>command('seek-by',{position_ms:delta}));
+$('speaker').onclick=()=>perform($('speaker'),()=>command(state?.speaker_on?'speaker-off':'speaker-on'));
 $('account-shortcut').onclick=()=>showView('settings');
 document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>showView(button.dataset.view));
 $('refresh-liked').onclick=()=>perform($('refresh-liked'),loadLiked);

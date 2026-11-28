@@ -3,7 +3,8 @@
     "step": {
       "user": {
         "title": "YouTube Music",
-        "description": "Address of the ytm-pulsar panel on the speaker. The usual port is 24721.\n\nAfter the wake word:\n• turn on youtube — resume the queue\n• youtube forward / youtube back\n• find on youtube …\n• youtube delete everything\n• random on youtube",
+        "description": "Address of the ytm-pulsar panel on the speaker. The usual port is 24721.\n\nAfter the wake word:\n• turn on youtube — resume the queue\n• youtube forward / youtube back\n• find on youtube …\n• youtube delete everything\n• random on youtube
+• turn the built-in speaker on or off — Lite 2 only",
         "data": {
           "host": "Speaker address",
           "port": "Port"

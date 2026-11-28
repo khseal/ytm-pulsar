@@ -151,6 +151,26 @@ func (c *Catalog) seekWindow(ctx context.Context, src streamInfo, targetMS int64
 	return win, nil
 }
 
+// seekTarget moves by delta and stays inside the track. A forward jump
+// that would pass the end stops one second before it, so the song does not
+// immediately finish and start the next one.
+func seekTarget(position, delta, duration int64) int64 {
+	pos := position + delta
+	if pos < 0 {
+		pos = 0
+	}
+	if duration > 0 && pos >= duration {
+		pos = duration - 1000
+		if pos < 0 {
+			pos = 0
+		}
+	}
+	if pos > 7200000 {
+		pos = 7200000
+	}
+	return pos
+}
+
 func (src streamInfo) hasSeekIndex() bool {
 	return src.initEnd > 0 && src.indexStart == src.initEnd+1 && src.indexEnd > src.indexStart && src.indexEnd < src.length && src.indexEnd <= 1<<20
 }

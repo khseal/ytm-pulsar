@@ -294,10 +294,26 @@ class YtmMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
         return await self._say(play)
 
+    async def async_voice_seek(self, delta_ms: int) -> str:
+        async def play():
+            await self._client.command("seek-by", position_ms=delta_ms)
+            if delta_ms < 0:
+                return "Отматываю ютуб на пятнадцать секунд"
+            return "Проматываю ютуб на пятнадцать секунд"
+
+        return await self._say(play)
+
     async def async_voice_random(self) -> str:
         async def play():
             await self._client.command("clear")
             await self._client.command("surprise")
             return "Включаю случайные треки с ютуба"
+
+        return await self._say(play)
+
+    async def async_voice_speaker(self, on: bool) -> str:
+        async def play():
+            await self._client.command("speaker-on" if on else "speaker-off")
+            return "Включаю динамик" if on else "Выключаю динамик"
 
         return await self._say(play)
