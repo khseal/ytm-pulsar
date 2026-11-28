@@ -66,6 +66,33 @@ func knownSurpriseGenres(query string) ([]string, error) {
 	return genres, nil
 }
 
+// surpriseGenreChoice reads the panel's genre list. An empty query keeps the
+// genres saved earlier. "*" selects every genre and remembers that choice.
+func surpriseGenreChoice(query string) (genres []string, remember bool, err error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, false, nil
+	}
+	if query == "*" {
+		return nil, true, nil
+	}
+	genres, err = knownSurpriseGenres(query)
+	return genres, err == nil, err
+}
+
+func (s *Server) storeGenresLocked(genres []string) error {
+	value := s.settingsLocked()
+	value.Genres = append([]string{}, genres...)
+	if err := validateSettings(value); err != nil {
+		return err
+	}
+	if err := writeSettings(value); err != nil {
+		return errors.New("не удалось сохранить жанры")
+	}
+	s.settings = &value
+	return nil
+}
+
 func surpriseQueries(n int, genres []string, rng *rand.Rand) []string {
 	if n <= 0 {
 		return nil
@@ -185,6 +212,8 @@ func (s *Server) appendSurpriseLocked(tracks []Track) (added int, start bool) {
 		s.state.Index = 0
 		s.state.PositionMS = 0
 	}
+	s.state.Exact = false
+	s.state.Random = true
 	s.saveLocked()
 	return len(tracks), start
 }

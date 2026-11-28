@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func (s *Server) installQueueLocked(tracks []Track, index int) {
+func (s *Server) installQueueLocked(tracks []Track, index int, exact bool) {
 	s.queueOrder = append([]Track(nil), tracks...)
 	s.state.Queue = append([]Track(nil), tracks...)
 	s.state.Index = index
@@ -17,6 +17,8 @@ func (s *Server) installQueueLocked(tracks []Track, index int) {
 		s.state.Index = 0
 	}
 	s.queueCast = false
+	s.state.Exact = exact
+	s.state.Random = false
 	if s.settingsLocked().Shuffle {
 		rand.Shuffle(len(s.state.Queue), func(i, j int) { s.state.Queue[i], s.state.Queue[j] = s.state.Queue[j], s.state.Queue[i] })
 		// Selecting a track must still start the selected track.
@@ -61,24 +63,48 @@ func (s *Server) shuffleQueue(enabled bool) response {
 	return response{State: &value}
 }
 
+// queueContinuation chooses how a queue grows on its last track.
+// A playlist stays as it is. Random adds another batch of the saved genres.
+// Anything else may add similar tracks.
+func queueContinuation(exact, random, radioOn, atTail bool) string {
+	if !radioOn || !atTail {
+		return ""
+	}
+	if random {
+		return "surprise"
+	}
+	if exact {
+		return ""
+	}
+	return "radio"
+}
+
 // Prefetch only at the tail. A stopped/replaced queue and a disabled radio can
 // never be revived by a slow recommendation request.
 func (s *Server) fillRadio(g uint64, id string) {
 	s.mu.Lock()
-	if s.generation != g || s.queueCast || !s.settingsLocked().Radio || s.state.Index+1 < len(s.state.Queue) {
+	atTail := s.state.Index+1 >= len(s.state.Queue)
+	mode := queueContinuation(s.state.Exact, s.state.Random, s.settingsLocked().Radio, atTail)
+	if s.generation != g || s.queueCast || mode == "" {
 		s.mu.Unlock()
 		return
 	}
+	genres := append([]string(nil), s.settingsLocked().Genres...)
+	queue := append([]Track(nil), s.state.Queue...)
 	task := s.radioLoad
-	owner := task == nil || task.generation != g || task.id != id
+	owner := task == nil || task.generation != g || task.id != id || task.mode != mode
 	if owner {
-		task = &radioLoad{generation: g, id: id, done: make(chan struct{})}
+		task = &radioLoad{generation: g, id: id, mode: mode, done: make(chan struct{})}
 		s.radioLoad = task
 	}
 	s.mu.Unlock()
 	if owner {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		task.tracks = s.catalog.radio(ctx, id)
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		if mode == "surprise" {
+			task.tracks, _ = s.catalog.surprise(ctx, queue, genres)
+		} else {
+			task.tracks = s.catalog.radio(ctx, id)
+		}
 		cancel()
 		close(task.done)
 	} else {
@@ -86,7 +112,11 @@ func (s *Server) fillRadio(g uint64, id string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.generation != g || s.closing || s.queueCast || !s.settingsLocked().Radio {
+	if s.generation != g || s.closing || s.queueCast {
+		return
+	}
+	atTail = s.state.Index+1 >= len(s.state.Queue)
+	if queueContinuation(s.state.Exact, s.state.Random, s.settingsLocked().Radio, atTail) != mode {
 		return
 	}
 	added := newRadioTracks(s.state.Queue, task.tracks)
@@ -101,6 +131,7 @@ func (s *Server) fillRadio(g uint64, id string) {
 type radioLoad struct {
 	generation uint64
 	id         string
+	mode       string
 	done       chan struct{}
 	tracks     []Track
 }

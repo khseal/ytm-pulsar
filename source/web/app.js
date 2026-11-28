@@ -337,6 +337,22 @@ function onGenreChange(event){
   else all.checked=false;
  }else if(!specifics.some(item=>item.checked))all.checked=true;
  updateGenreLabel();
+ persistGenres();
+}
+let genreSave;
+function persistGenres(){
+ clearTimeout(genreSave);
+ const genres=selectedGenres();
+ genreSave=setTimeout(()=>command('config-set',{settings:{genres}}).catch(error=>notice(error.message||'Не удалось сохранить жанры.')),200);
+}
+function applyGenreSelection(genres){
+ const saved=new Set(genres||[]);
+ const all=document.querySelector('#genre-menu input[value=""]');
+ const specifics=[...document.querySelectorAll('#genre-menu input')].filter(item=>item.value);
+ const known=specifics.filter(item=>saved.has(item.value));
+ if(!known.length){all.checked=true;specifics.forEach(item=>{item.checked=false;});}
+ else{all.checked=false;specifics.forEach(item=>{item.checked=saved.has(item.value);});}
+ updateGenreLabel();
 }
 $('genre-toggle').onclick=event=>{
  event.stopPropagation();
@@ -349,13 +365,13 @@ $('genre-menu').addEventListener('change',onGenreChange);
 document.addEventListener('click',()=>{$('genre-menu').hidden=true;$('genre-toggle').setAttribute('aria-expanded','false');});
 async function addSurprise(genres){
  const before=state?.queue?.length||0;
- const result=await command('surprise',genres.length?{query:genres.join(',')}:{});
+ const result=await command('surprise',{query:genres.length?genres.join(','):'*'});
  const added=Math.max(0,(result.state?.queue?.length||0)-before);
  if(added>0)notice(`В конец очереди добавлено ${added} ${tracksWord(added)}.`,true);
 }
 $('surprise').onclick=()=>perform($('surprise'),()=>addSurprise(selectedGenres()));
 async function loadGenres(){
- const result=await command('genres');
+ const [result,config]=await Promise.all([command('genres'),command('config-get')]);
  const menu=$('genre-menu');
  for(const genre of result.genres||[]){
   const label=document.createElement('label');
@@ -366,6 +382,7 @@ async function loadGenres(){
   label.append(input,document.createTextNode(' '+genreLabel(genre)));
   menu.append(label);
  }
+ applyGenreSelection(config.settings?.genres);
 }
 document.addEventListener('visibilitychange',()=>{clearTimeout(refreshTimer);if(!document.hidden)poll();else schedulePoll();});
 async function init(){

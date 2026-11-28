@@ -56,6 +56,10 @@ type State struct {
 	LoggedIn     bool        `json:"logged_in"`
 	Radio        bool        `json:"radio"`
 	Shuffle      bool        `json:"shuffle"`
+	// Exact is a playlist, album or liked list: recommendations must not extend it.
+	Exact bool `json:"exact,omitempty"`
+	// Random keeps adding tracks of the saved genres when the last one plays.
+	Random bool `json:"random,omitempty"`
 	Volume       int         `json:"volume"`
 	HasVolume    bool        `json:"has_volume,omitempty"`
 	Muted        bool        `json:"muted,omitempty"`
@@ -276,10 +280,13 @@ func (s *Server) command(ctx context.Context, r request) response {
 		}
 		index := -1
 		lower := strings.ToLower(r.Query)
+		exact := false
 		if r.Action == "play" && !isLikedQuery(r.Query) && !strings.HasPrefix(lower, "альбом ") && !strings.HasPrefix(lower, "плейлист ") && !strings.Contains(r.Query, "list=") {
 			index = 0
+		} else if r.Action == "play" {
+			exact = true
 		}
-		s.installQueueLocked(tracks, index)
+		s.installQueueLocked(tracks, index, exact)
 		s.state.PositionMS = 0
 		s.saveLocked()
 		s.mu.Unlock()
@@ -287,11 +294,19 @@ func (s *Server) command(ctx context.Context, r request) response {
 	case "genres":
 		return response{Genres: append([]string(nil), surpriseGenres...)}
 	case "surprise":
-		genres, err := knownSurpriseGenres(r.Query)
+		genres, remember, err := surpriseGenreChoice(r.Query)
 		if err != nil {
 			return response{Error: err.Error()}
 		}
 		s.mu.Lock()
+		if remember {
+			if err := s.storeGenresLocked(genres); err != nil {
+				s.mu.Unlock()
+				return response{Error: err.Error()}
+			}
+		} else {
+			genres = append([]string(nil), s.settingsLocked().Genres...)
+		}
 		s.lookupGeneration++
 		lookup := s.lookupGeneration
 		g := s.generation
@@ -332,7 +347,14 @@ func (s *Server) command(ctx context.Context, r request) response {
 			s.mu.Unlock()
 			return response{Error: "список изменился; обновите его и выберите трек снова"}
 		}
-		s.installQueueLocked(tracks, i)
+		exact := false
+		random := false
+		if r.Action == "jump" {
+			exact = s.state.Exact
+			random = s.state.Random
+		}
+		s.installQueueLocked(tracks, i, exact)
+		s.state.Random = random
 		s.state.PositionMS = 0
 		s.mu.Unlock()
 		s.start(0)
@@ -381,6 +403,8 @@ func (s *Server) command(ctx context.Context, r request) response {
 			s.state.Error = ""
 			s.queueOrder = nil
 			s.queueCast = false
+			s.state.Exact = false
+			s.state.Random = false
 		case "seek-by":
 			if len(s.state.Queue) == 0 {
 				s.mu.Unlock()
@@ -797,8 +821,8 @@ func help() {
   seek СЕКУНДЫ              перейти к позиции (ближайший аудиофрагмент)
   next | previous            следующий / предыдущий трек
   recommendations            персональные рекомендации (нужен вход)
-  surprise                   случайные треки выбранных жанров
-  surprise жанр,жанр         один или несколько жанров; пусто — все
+  surprise                   случайные треки сохранённых жанров; без выбора — все
+  surprise жанр,жанр         сохранить жанры и добавить их треки в конец очереди
   clear                      остановить и очистить очередь
   shuffle-on | shuffle-off   перемешивание очереди
   config get                 постоянные настройки

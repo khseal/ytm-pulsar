@@ -19,6 +19,7 @@ type Settings struct {
 	WebAddr  string   `json:"web_addr"`
 	Radio    bool     `json:"radio"`
 	Shuffle  bool     `json:"shuffle"`
+	Genres   []string `json:"genres,omitempty"`
 }
 
 // storedSettings also accepts the Alice-only keys an ytm-alice settings.json
@@ -37,6 +38,7 @@ type SettingsPatch struct {
 	WebAddr  *string  `json:"web_addr,omitempty"`
 	Radio    *bool    `json:"radio,omitempty"`
 	Shuffle  *bool    `json:"shuffle,omitempty"`
+	Genres   []string `json:"genres,omitempty"`
 }
 
 func defaultSettings() Settings {
@@ -51,6 +53,7 @@ func (s *Server) settingsLocked() Settings {
 		value = *s.settings
 	}
 	value.WebHosts = append([]string(nil), value.WebHosts...)
+	value.Genres = append([]string(nil), value.Genres...)
 	return value
 }
 
@@ -78,6 +81,11 @@ func validateSettings(value Settings) error {
 		}
 		if n == 8008 || n == 18883 {
 			return errors.New("порт занят службой трансляции или аудиоплеером")
+		}
+	}
+	if len(value.Genres) > 0 {
+		if _, err := knownSurpriseGenres(strings.Join(value.Genres, ",")); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -156,6 +164,9 @@ func (s *Server) settingsCommand(r request) response {
 		}
 		if p.Shuffle != nil {
 			value.Shuffle = *p.Shuffle
+		}
+		if p.Genres != nil {
+			value.Genres = append([]string{}, p.Genres...)
 		}
 		if err := validateSettings(value); err != nil {
 			return response{Error: err.Error()}

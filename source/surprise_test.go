@@ -104,9 +104,10 @@ func TestAppendSurpriseKeepsTheCurrentTrack(t *testing.T) {
 	t.Setenv("YTM_ALICE_DATA", t.TempDir())
 	s := &Server{state: State{Status: "playing", Index: 0, Queue: []Track{{ID: "aaaaaaaaaaa", Title: "Сейчас", Artists: "А"}}}}
 	s.queueOrder = append([]Track(nil), s.state.Queue...)
+	s.state.Exact = true
 	added, start := s.appendSurpriseLocked([]Track{{ID: "bbbbbbbbbbb", Title: "Новая", Artists: "Б"}})
-	if start || added != 1 || len(s.state.Queue) != 2 || s.state.Queue[0].ID != "aaaaaaaaaaa" || s.state.Index != 0 {
-		t.Fatalf("added=%d start=%v index=%d %+v", added, start, s.state.Index, s.state.Queue)
+	if start || added != 1 || len(s.state.Queue) != 2 || s.state.Queue[0].ID != "aaaaaaaaaaa" || s.state.Index != 0 || s.state.Exact || !s.state.Random {
+		t.Fatalf("added=%d start=%v index=%d exact=%v random=%v %+v", added, start, s.state.Index, s.state.Exact, s.state.Random, s.state.Queue)
 	}
 }
 
@@ -114,7 +115,54 @@ func TestAppendSurpriseStartsAnEmptyQueue(t *testing.T) {
 	t.Setenv("YTM_ALICE_DATA", t.TempDir())
 	s := &Server{state: State{Status: "stopped", Queue: []Track{}}}
 	added, start := s.appendSurpriseLocked([]Track{{ID: "bbbbbbbbbbb", Title: "Новая", Artists: "Б"}})
-	if !start || added != 1 || s.state.Index != 0 || s.state.Queue[0].ID != "bbbbbbbbbbb" {
-		t.Fatalf("added=%d start=%v %+v", added, start, s.state)
+	if !start || added != 1 || s.state.Index != 0 || s.state.Queue[0].ID != "bbbbbbbbbbb" || !s.state.Random {
+		t.Fatalf("added=%d start=%v random=%v %+v", added, start, s.state.Random, s.state)
+	}
+}
+
+func TestRandomKeepsGrowingAndAPlaylistDoesNot(t *testing.T) {
+	if queueContinuation(false, true, true, true) != "surprise" {
+		t.Fatal("random queue should add another batch")
+	}
+	if queueContinuation(true, false, true, true) != "" {
+		t.Fatal("playlist should stay unchanged")
+	}
+	if queueContinuation(false, false, true, true) != "radio" {
+		t.Fatal("a single track should still get similar songs")
+	}
+	if queueContinuation(false, true, false, true) != "" || queueContinuation(false, true, true, false) != "" {
+		t.Fatal("continuation must wait for the last track and the radio switch")
+	}
+}
+
+func TestSavedGenresFeedTheNextSurprise(t *testing.T) {
+	t.Setenv("YTM_ALICE_DATA", t.TempDir())
+	s := &Server{settings: &Settings{WebAddr: ":24721", Radio: true}}
+	genres, remember, err := surpriseGenreChoice("джаз, рок")
+	if err != nil || !remember || strings.Join(genres, ",") != "джаз,рок" {
+		t.Fatalf("choice: %v %v %v", err, remember, genres)
+	}
+	s.mu.Lock()
+	if err := s.storeGenresLocked(genres); err != nil {
+		s.mu.Unlock()
+		t.Fatal(err)
+	}
+	s.mu.Unlock()
+	if _, remember, err := surpriseGenreChoice(""); err != nil || remember {
+		t.Fatalf("empty query should reuse the saved genres: %v %v", err, remember)
+	}
+	saved := s.getSettings().Genres
+	got := surpriseQueries(4, saved, rand.New(rand.NewPCG(5, 6)))
+	for _, query := range got {
+		if query != "джаз" && !strings.HasPrefix(query, "джаз ") && query != "рок" && !strings.HasPrefix(query, "рок ") {
+			t.Fatalf("left the saved genres: %q", query)
+		}
+	}
+	out := s.settingsCommand(request{Action: "config-set", Settings: &SettingsPatch{Genres: []string{}}})
+	if out.Error != "" || len(out.Settings.Genres) != 0 {
+		t.Fatalf("clear: %s %+v", out.Error, out.Settings)
+	}
+	if _, _, err := surpriseGenreChoice("не жанр"); err == nil {
+		t.Fatal("unknown genre accepted")
 	}
 }

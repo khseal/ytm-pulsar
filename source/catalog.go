@@ -204,6 +204,13 @@ func firstKey(x any, key string) string {
 	return ""
 }
 func parseTracks(root any) []Track {
+	return parseCollection(root, 7200000, "")
+}
+
+// parseCollection reads a playlist, album or liked list. maxMS <= 0 keeps
+// livestreams and long mixes; a 2 hour cap is only for search and radio.
+// list, when set, drops tiles that belong to another queue.
+func parseCollection(root any, maxMS int64, list string) []Track {
 	tracks := []Track{}
 	seen := map[string]bool{}
 	var walk func(any)
@@ -211,7 +218,7 @@ func parseTracks(root any) []Track {
 		switch v := x.(type) {
 		case map[string]any:
 			if z, ok := v["tileRenderer"]; ok {
-				if t, ok := parseTile(z); ok && !seen[t.ID] {
+				if t, ok := parseTileLimited(z, maxMS); ok && belongsToList(str(get(z, "onSelectCommand", "watchEndpoint", "playlistId")), list) && !seen[t.ID] {
 					seen[t.ID] = true
 					tracks = append(tracks, t)
 				}
@@ -220,7 +227,7 @@ func parseTracks(root any) []Track {
 			for _, kind := range []string{"musicResponsiveListItemRenderer", "playlistPanelVideoRenderer", "musicTwoRowItemRenderer"} {
 				if z, ok := v[kind]; ok {
 					id := firstKey(z, "videoId")
-					if videoID.MatchString(id) && !seen[id] {
+					if videoID.MatchString(id) && belongsToList(itemPlaylistID(z), list) && !seen[id] {
 						title := text(get(z, "flexColumns", 0, "musicResponsiveListItemFlexColumnRenderer", "text"))
 						if title == "" {
 							title = text(get(z, "title"))
@@ -251,7 +258,7 @@ func parseTracks(root any) []Track {
 						if t.ThumbnailURL == "" {
 							t.ThumbnailURL = fallbackThumbnail(id)
 						}
-						if t.DurationMS <= 7200000 {
+						if maxMS <= 0 || t.DurationMS <= maxMS {
 							tracks = append(tracks, t)
 							seen[id] = true
 						}
@@ -277,6 +284,30 @@ func parseTracks(root any) []Track {
 	walk(root)
 
 	return tracks
+}
+
+func belongsToList(playlistID, list string) bool {
+	return list == "" || playlistID == "" || playlistID == list
+}
+
+func itemPlaylistID(item any) string {
+	if id := str(get(item, "playlistItemData", "playlistId")); id != "" {
+		return id
+	}
+	if id := str(get(item, "navigationEndpoint", "watchEndpoint", "playlistId")); id != "" {
+		return id
+	}
+	return str(get(item, "playNavigationEndpoint", "watchEndpoint", "playlistId"))
+}
+
+func collectionID(browseID string) string {
+	if browseID == "VLLM" {
+		return "LM"
+	}
+	if strings.HasPrefix(browseID, "VL") {
+		return strings.TrimPrefix(browseID, "VL")
+	}
+	return ""
 }
 func (c *Catalog) request(ctx context.Context, endpoint string, body map[string]any) (map[string]any, error) {
 	return c.requestWithAuth(ctx, endpoint, body, c.credentials())
@@ -363,10 +394,12 @@ func (c *Catalog) lookup(ctx context.Context, q string) ([]Track, error) {
 	}
 	var tracks []Track
 	var err error
-	u, _ := url.Parse(q)
+	// A song name is not always a valid URL («100% …»): Parse then returns
+	// nil, so only a parsed query can be a link.
+	u, parseErr := url.Parse(q)
 	if isLikedQuery(q) {
 		tracks, err = c.browse(ctx, "VLLM")
-	} else if u.Scheme != "" {
+	} else if parseErr == nil && u.Scheme != "" {
 		host := strings.ToLower(u.Hostname())
 		if (u.Scheme != "http" && u.Scheme != "https") || !(host == "youtu.be" || host == "youtube.com" || host == "www.youtube.com" || host == "music.youtube.com") {
 			return nil, errors.New("поддерживаются только ссылки YouTube")
@@ -470,7 +503,7 @@ func (c *Catalog) browse(ctx context.Context, id string) ([]Track, error) {
 		if artist == "" && strings.HasPrefix(id, "MPREb_") {
 			artist = albumArtist(page)
 		}
-		for _, track := range parseTracks(page) {
+		for _, track := range parseCollection(page, 0, collectionID(id)) {
 			if !seen[track.ID] {
 				seen[track.ID] = true
 				tracks = append(tracks, track)

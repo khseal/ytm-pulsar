@@ -235,7 +235,7 @@ func TestShuffleKeepsCurrentTrackAndRestoresOrder(t *testing.T) {
 		tracks = append(tracks, Track{ID: fmt.Sprintf("%011d", i)})
 	}
 	s := &Server{state: State{Status: "playing"}}
-	s.installQueueLocked(tracks, 4)
+	s.installQueueLocked(tracks, 4, false)
 	if out := s.shuffleQueue(true); out.Error != "" {
 		t.Fatal(out.Error)
 	}
@@ -247,6 +247,45 @@ func TestShuffleKeepsCurrentTrackAndRestoresOrder(t *testing.T) {
 		if track.ID != tracks[i].ID {
 			t.Fatal("order was not restored")
 		}
+	}
+}
+
+func TestPlaylistQueueDoesNotGrowByRadio(t *testing.T) {
+	s := &Server{settings: &Settings{Radio: true, WebAddr: ":24721"}, state: State{
+		Index: 0, Exact: true,
+		Queue: []Track{{ID: "abcdefghijk", Title: "Эфир"}},
+	}}
+	s.fillRadio(0, "abcdefghijk")
+	if len(s.state.Queue) != 1 || s.state.Queue[0].Title != "Эфир" {
+		t.Fatalf("%+v", s.state.Queue)
+	}
+}
+
+func TestCollectionKeepsLongAndLiveTracks(t *testing.T) {
+	page := map[string]any{"contents": []any{
+		map[string]any{"playlistPanelVideoRenderer": map[string]any{
+			"videoId": "abcdefghijk", "title": map[string]any{"simpleText": "Эфир"},
+			"lengthText":          map[string]any{"simpleText": "LIVE"},
+			"navigationEndpoint":  map[string]any{"watchEndpoint": map[string]any{"videoId": "abcdefghijk", "playlistId": "PLtest"}},
+		}},
+		map[string]any{"playlistPanelVideoRenderer": map[string]any{
+			"videoId": "bbcdefghijk", "title": map[string]any{"simpleText": "Архив"},
+			"lengthText":         map[string]any{"simpleText": "4:00:00"},
+			"navigationEndpoint": map[string]any{"watchEndpoint": map[string]any{"videoId": "bbcdefghijk", "playlistId": "PLtest"}},
+		}},
+		map[string]any{"playlistPanelVideoRenderer": map[string]any{
+			"videoId": "ccccccccccc", "title": map[string]any{"simpleText": "Чужой"},
+			"lengthText":         map[string]any{"simpleText": "3:00"},
+			"navigationEndpoint": map[string]any{"watchEndpoint": map[string]any{"videoId": "ccccccccccc", "playlistId": "RDAMVMzzzzzzzzzzz"}},
+		}},
+	}}
+	got := parseCollection(page, 0, "PLtest")
+	if len(got) != 2 || got[0].ID != "abcdefghijk" || got[0].DurationMS != 0 || got[1].ID != "bbcdefghijk" || got[1].DurationMS != 4*60*60*1000 {
+		t.Fatalf("%+v", got)
+	}
+	searched := parseTracks(page)
+	if len(searched) != 2 || searched[0].ID != "abcdefghijk" || searched[1].ID != "ccccccccccc" {
+		t.Fatalf("search cap: %+v", searched)
 	}
 }
 

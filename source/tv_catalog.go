@@ -88,6 +88,10 @@ func tileDuration(tile any) string {
 }
 
 func parseTile(tile any) (Track, bool) {
+	return parseTileLimited(tile, 7200000)
+}
+
+func parseTileLimited(tile any, maxMS int64) (Track, bool) {
 	if kind := str(get(tile, "contentType")); kind != "" && kind != "TILE_CONTENT_TYPE_VIDEO" {
 		return Track{}, false
 	}
@@ -103,7 +107,7 @@ func parseTile(tile any) (Track, bool) {
 	if t.ThumbnailURL == "" {
 		t.ThumbnailURL = fallbackThumbnail(id)
 	}
-	return t, t.DurationMS <= 7200000
+	return t, maxMS <= 0 || t.DurationMS <= maxMS
 }
 
 // parseTileQueue keeps tiles of one watch queue, in page order.
